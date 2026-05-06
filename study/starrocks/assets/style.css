@@ -1,0 +1,364 @@
+/* ==========================================================
+   StarRocks 한글 정리 - 공통 스타일
+   ========================================================== */
+
+:root {
+  --sidebar-width: 280px;
+  --color-bg: #ffffff;
+  --color-bg-alt: #f7f8fa;
+  --color-text: #1f2328;
+  --color-text-muted: #57606a;
+  --color-border: #d0d7de;
+  --color-link: #0969da;
+  --color-link-hover: #0550ae;
+  --color-accent: #cf222e; /* StarRocks-ish red */
+  --color-tip-bg: #fff8e1;
+  --color-tip-border: #f5b400;
+  --color-cluster-bg: #eef6ff;
+  --color-cluster-border: #2e7df0;
+  --color-warn-bg: #ffebe9;
+  --color-warn-border: #cf222e;
+  --color-code-bg: #f6f8fa;
+  --color-code-text: #1f2328;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Pretendard", Roboto, sans-serif;
+  --font-mono: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--color-link); text-decoration: none; }
+a:hover { color: var(--color-link-hover); text-decoration: underline; }
+
+/* -------------------------- 레이아웃 -------------------------- */
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: var(--color-bg-alt);
+  border-right: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 22px 18px;
+}
+
+.sidebar h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+  color: var(--color-accent);
+}
+.sidebar .subtitle {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-bottom: 18px;
+}
+
+.sidebar nav ol,
+.sidebar nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar nav > ol > li {
+  margin-bottom: 4px;
+}
+
+.sidebar nav a {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 14px;
+}
+.sidebar nav a:hover {
+  background: #ebeef2;
+  text-decoration: none;
+}
+.sidebar nav a.active {
+  background: #e0e8f5;
+  color: var(--color-link);
+  font-weight: 600;
+}
+
+.sidebar nav .section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  margin: 16px 10px 6px;
+  font-weight: 700;
+}
+
+.sidebar nav ul.toc-sub {
+  margin: 2px 0 4px 12px;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-border);
+}
+.sidebar nav ul.toc-sub a {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  padding: 3px 8px;
+}
+.sidebar nav ul.toc-sub a:hover {
+  color: var(--color-link);
+}
+
+/* -------------------------- 콘텐츠 -------------------------- */
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 36px 56px 80px;
+  max-width: 980px;
+}
+
+.content h1, .content h2, .content h3, .content h4 {
+  color: var(--color-text);
+  line-height: 1.3;
+  scroll-margin-top: 12px;
+}
+
+.content h1 {
+  font-size: 32px;
+  border-bottom: 2px solid var(--color-border);
+  padding-bottom: 12px;
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.content h2 {
+  font-size: 24px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 6px;
+  margin-top: 36px;
+  margin-bottom: 14px;
+}
+
+.content h3 {
+  font-size: 18px;
+  margin-top: 28px;
+  margin-bottom: 10px;
+}
+
+.content h4 {
+  font-size: 16px;
+  margin-top: 18px;
+  margin-bottom: 6px;
+}
+
+.content p { margin: 8px 0 12px; }
+
+.content ul, .content ol { padding-left: 22px; }
+.content li { margin: 4px 0; }
+.content li > p { margin: 4px 0; }
+
+.content code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--color-code-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #cf222e;
+}
+
+.content pre {
+  background: #0d1117;
+  color: #e6edf3;
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.content pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 18px;
+  font-size: 14px;
+}
+.content th, .content td {
+  border: 1px solid var(--color-border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.content th {
+  background: var(--color-bg-alt);
+  font-weight: 600;
+}
+
+.content blockquote {
+  margin: 12px 0;
+  padding: 8px 16px;
+  border-left: 4px solid var(--color-border);
+  color: var(--color-text-muted);
+  background: var(--color-bg-alt);
+  border-radius: 0 4px 4px 0;
+}
+
+/* -------------------------- 콜아웃 박스 -------------------------- */
+.callout {
+  margin: 18px 0;
+  padding: 14px 18px;
+  border-radius: 8px;
+  border-left: 4px solid;
+}
+.callout .callout-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.callout p:last-child { margin-bottom: 0; }
+.callout p:first-of-type { margin-top: 0; }
+
+.callout.tip {
+  background: var(--color-tip-bg);
+  border-color: var(--color-tip-border);
+}
+.callout.tip .callout-title { color: #8a6d00; }
+
+.callout.warn {
+  background: var(--color-warn-bg);
+  border-color: var(--color-warn-border);
+}
+.callout.warn .callout-title { color: var(--color-warn-border); }
+
+/* 사용자 클러스터 적용 조언 (요약과 살짝 구분되는 박스) */
+.callout.cluster {
+  background: var(--color-cluster-bg);
+  border-color: var(--color-cluster-border);
+  border-left-width: 5px;
+  position: relative;
+}
+.callout.cluster .callout-title {
+  color: var(--color-cluster-border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.callout.cluster .callout-title::before {
+  content: "🖥️";
+}
+
+/* -------------------------- 헤더/푸터 -------------------------- */
+.page-header {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.page-header .breadcrumb a {
+  color: var(--color-text-muted);
+}
+.page-header .breadcrumb a:hover {
+  color: var(--color-link);
+}
+
+.page-footer {
+  margin-top: 60px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text-muted);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.page-footer .nav-links a {
+  margin-right: 12px;
+}
+
+.source-cite {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+.source-cite::before { content: "🔖 출처: "; }
+
+/* -------------------------- 반응형 -------------------------- */
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .content { padding: 24px 18px 60px; }
+}
+
+/* -------------------------- 내부 앵커 헤더 링크 -------------------------- */
+.anchor-link {
+  margin-left: 6px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  font-size: 0.8em;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.content h2:hover .anchor-link,
+.content h3:hover .anchor-link,
+.content h4:hover .anchor-link { opacity: 1; }
+
+/* 키보드 단축키, kbd */
+kbd {
+  font-family: var(--font-mono);
+  background: #f6f8fa;
+  border: 1px solid var(--color-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+}
+
+/* 그리드 카드 (시작 페이지용) */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin: 18px 0 28px;
+}
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  background: var(--color-bg-alt);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+}
+.card h3 { margin: 0 0 6px; font-size: 16px; }
+.card p { margin: 0; color: var(--color-text-muted); font-size: 13px; }
+.card a { color: inherit; }
+.card a:hover { text-decoration: none; }
