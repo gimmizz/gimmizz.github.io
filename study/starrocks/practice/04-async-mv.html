@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P-4. Async MV 실습 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="practice-mv" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 실습 / P-4. Async MV</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>P-4. Async MV 실습 — Query Rewrite 확인까지</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 목표</div>
+      <p>Hive Catalog 위에 Async MV를 만들고, 사용자 SQL이 자동으로 MV로 재작성되는지 EXPLAIN으로 확인한다.</p>
+    </div>
+
+    <div class="steps-container">
+      <div class="step">
+        <strong>전제</strong>
+        <p>P-3 실습이 끝나 <code>hive_local.dwh.events</code> 테이블이 있는 상태.</p>
+      </div>
+
+      <div class="step">
+        <strong>Async MV 생성</strong>
+<pre><code>USE default_catalog.shop;
+
+CREATE MATERIALIZED VIEW mv_event_user_d
+PARTITION BY dt
+DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 10 MINUTE)
+PROPERTIES (
+  "replication_num" = "1",
+  "enable_query_rewrite" = "true"
+)
+AS
+SELECT
+  date_trunc('day', event_time) AS dt,
+  user_id,
+  event_type,
+  count(*) AS cnt
+FROM hive_local.dwh.events
+GROUP BY 1, 2, 3;</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>최초 리프레시 강제</strong>
+<pre><code>REFRESH MATERIALIZED VIEW mv_event_user_d;
+
+-- 진행 상황
+SHOW MATERIALIZED VIEW mv_event_user_d\G</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>원본 SQL을 실행하면서 EXPLAIN으로 재작성 확인</strong>
+<pre><code>SET enable_materialized_view_rewrite = true;
+
+EXPLAIN
+SELECT
+  date_trunc('day', event_time) AS dt,
+  user_id,
+  count(*) AS cnt
+FROM hive_local.dwh.events
+WHERE event_time &gt;= '2026-05-07'
+GROUP BY 1, 2;</code></pre>
+        <p>플랜의 SCAN 부분에 <code>RewriteByMV: mv_event_user_d</code> 비슷한 표시가 있어야 성공.</p>
+      </div>
+
+      <div class="step">
+        <strong>비교 — MV 재작성 끄기</strong>
+<pre><code>SET enable_materialized_view_rewrite = false;
+EXPLAIN SELECT ...;</code></pre>
+        <p>이번에는 hive_local.dwh.events를 직접 스캔하는 플랜이 나오는지 확인.</p>
+      </div>
+
+      <div class="step">
+        <strong>MV 활용 응답 시간 비교</strong>
+<pre><code>SET enable_materialized_view_rewrite = true;
+SELECT count(*) FROM hive_local.dwh.events WHERE dt='2026-05-07';
+
+SET enable_materialized_view_rewrite = false;
+SELECT count(*) FROM hive_local.dwh.events WHERE dt='2026-05-07';</code></pre>
+      </div>
+    </div>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>운영 약 20대 환경에서는 BI 대시보드 SQL 패턴 톱-N를 추출 → MV 후보로 일괄 등록 → Query Rewrite로 자동 가속하는 패턴이 효과가 가장 큼. 사용자 코드 변경이 필요 없다는 점이 핵심 가치.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./03-hive-on-minio.html">← P-3. Hive 실습</a>
+        <a href="./05-backup-restore.html">다음 → P-5. 백업·복원</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/using_starrocks/Materialized_view/" target="_blank" rel="noopener">docs.starrocks.io / Materialized view</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

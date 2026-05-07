@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3-1. 파티션 · 버킷팅 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="partition" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 테이블 설정 심화 / 3-1. 파티션 · 버킷팅</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>3-1. 파티션 · 버킷팅 (Partition · Distribution)</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks는 데이터를 <strong>파티션 → 버킷</strong> 두 단계로 분할한다. 파티션은 시간/카테고리 기반의 큰 가지치기,
+      버킷(=Tablet)은 노드/디스크 분산이 목적. v3.2부터는 둘 다 자동(Expression Partition / Auto Bucket)이 권장.</p>
+    </div>
+
+    <h2 id="hierarchy">계층</h2>
+<div class="mermaid">
+graph TD
+  T["Table"]
+  T --> P1["Partition (RANGE/LIST/EXPR)"]
+  P1 --> B["Bucket (Tablet)<br/>HASH or RANDOM"]
+  B --> R["Replica × N (보통 3)"]
+</div>
+
+    <h2 id="partition">파티션 (PARTITION BY)</h2>
+
+    <h3>1) RANGE 파티션 (가장 흔함)</h3>
+<pre><code>PARTITION BY RANGE(dt) (
+  START ("2026-01-01") END ("2026-12-31") EVERY (INTERVAL 1 DAY)
+)</code></pre>
+    <ul>
+      <li>일자/시간 기반 데이터에 표준.</li>
+      <li>파티션 단위 보존정책(<code>dynamic_partition</code>) 설정 가능.</li>
+      <li>오래된 파티션 일괄 삭제: <code>ALTER TABLE t DROP PARTITION p20260101;</code></li>
+    </ul>
+
+    <h3>2) LIST 파티션</h3>
+<pre><code>PARTITION BY LIST(country) (
+  PARTITION p_kr VALUES IN ('KR'),
+  PARTITION p_jp VALUES IN ('JP'),
+  PARTITION p_etc VALUES IN ('US','CN','EU')
+)</code></pre>
+    <p>카테고리 기반 분리. 자주 쓰는 카테고리만 별도 파티션으로 빼서 가지치기에 활용.</p>
+
+    <h3>3) Expression 파티션 (v3.x, 자동) ⭐</h3>
+<pre><code>-- 일자별 자동 파티션 (시간 함수 기반)
+PARTITION BY date_trunc('day', event_time)
+
+-- 새 dt 값이 들어오면 파티션 자동 생성</code></pre>
+    <p>RANGE처럼 미리 START/END를 못 박지 않아도 새 값에 따라 파티션이 즉석 생성됨. 운영 부담이 가장 작음.</p>
+
+    <h3>4) 동적 파티션 (Dynamic Partition)</h3>
+<pre><code>PROPERTIES (
+  "dynamic_partition.enable"          = "true",
+  "dynamic_partition.time_unit"       = "DAY",
+  "dynamic_partition.start"           = "-30",     -- 30일 보관
+  "dynamic_partition.end"             = "3",       -- 미래 3일치 미리 생성
+  "dynamic_partition.prefix"          = "p",
+  "dynamic_partition.buckets"         = "32"
+)</code></pre>
+    <p>오래된 파티션은 자동 삭제되고, 미래 파티션은 미리 생성됨. ETL 운영이 단순해짐.</p>
+
+    <h2 id="bucket">버킷팅 (DISTRIBUTED BY)</h2>
+
+    <h3>HASH 버킷 (기본)</h3>
+<pre><code>DISTRIBUTED BY HASH(user_id)            -- v3.2+: 버킷 수 자동
+DISTRIBUTED BY HASH(user_id) BUCKETS 32 -- 명시적</code></pre>
+    <ul>
+      <li>JOIN/GROUP BY 키와 일치시키면 셔플 절감 (Bucket Shuffle / Colocate).</li>
+      <li>고카디널리티 컬럼이 좋다 — 버킷 편향 방지.</li>
+    </ul>
+
+    <h3>RANDOM 버킷</h3>
+<pre><code>DISTRIBUTED BY RANDOM            -- 키 없음
+DISTRIBUTED BY RANDOM BUCKETS 32</code></pre>
+    <p>균등 분배에 가장 좋지만 Bucket Shuffle/Colocate를 못 함. 단순 스캔이 대부분인 로그 테이블에 적합.</p>
+
+    <h3>버킷 수 가이드</h3>
+    <ul>
+      <li>v3.2+의 Auto Bucket을 우선 권장.</li>
+      <li>수동으로 잡는다면 한 Tablet의 데이터가 <strong>1~10GB 정도</strong>가 되도록.</li>
+      <li>BE 수의 배수가 권장 — 노드 간 균등.</li>
+    </ul>
+
+    <h2 id="patterns">자주 쓰는 패턴</h2>
+
+    <h3>패턴 A — 이벤트 로그 (Append-only)</h3>
+<pre><code>CREATE TABLE event_log (
+  event_time   DATETIME NOT NULL,
+  user_id      BIGINT,
+  event_type   VARCHAR(32),
+  payload      STRING
+)
+DUPLICATE KEY(event_time, user_id)
+PARTITION BY date_trunc('day', event_time)
+DISTRIBUTED BY RANDOM
+PROPERTIES ("replication_num" = "3");</code></pre>
+
+    <h3>패턴 B — 트랜잭션 마스터 (UPSERT)</h3>
+<pre><code>CREATE TABLE orders (
+  order_id   BIGINT NOT NULL,
+  user_id    BIGINT,
+  status     VARCHAR(32),
+  amount     DECIMAL(18,2),
+  updated_at DATETIME
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('month', updated_at)
+DISTRIBUTED BY HASH(order_id)
+ORDER BY(updated_at)
+PROPERTIES (
+  "replication_num"          = "3",
+  "enable_persistent_index"  = "true"
+);</code></pre>
+
+    <h3>패턴 C — 차원 테이블 (작고 자주 조인)</h3>
+<pre><code>CREATE TABLE dim_user (
+  user_id BIGINT NOT NULL,
+  name    VARCHAR(64),
+  grade   TINYINT
+)
+PRIMARY KEY(user_id)
+DISTRIBUTED BY HASH(user_id) BUCKETS 8
+PROPERTIES ("replication_num" = "3", "colocate_with" = "g_user");</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>Auto Bucket 신뢰</strong>: 약 17 BE × 디스크 8 환경에서는 Auto Bucket이 보통 잘 잡아 줍니다. 명시 없이 시작하고, 핫스팟이 보일 때만 조정.</li>
+        <li><strong>Expression Partition을 표준으로</strong>: 신규 테이블은 <code>date_trunc('day', ...)</code> 형태가 운영 편의가 가장 큼.</li>
+        <li><strong>Dynamic Partition 보존정책</strong>: 내부 마트는 90~180일, 임시 작업 테이블은 7~14일 정도가 무난.</li>
+        <li><strong>Tablet 폭주 주의</strong>: 시간 단위 파티션 + 큰 BUCKETS는 Tablet 수를 급증시킴. 내부 마트는 일자 파티션이 표준.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./03-data-models.html">← 3. 데이터 모델</a>
+        <a href="./03c-indexes.html">다음 → 3-2. 인덱스</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/table_design/Data_distribution/" target="_blank" rel="noopener">docs.starrocks.io / Data distribution</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

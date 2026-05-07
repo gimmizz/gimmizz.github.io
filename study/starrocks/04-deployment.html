@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>4. 배포 / 클러스터 구축 — StarRocks 한글 정리</title>
+  <title>4. 배포 / 클러스터 구축 — StarRocks 가이드</title>
   <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
@@ -23,6 +23,25 @@
       <p>새 클러스터는 보통 <strong>FE 3대 + BE ≥3대</strong>로 시작한다. 외부 의존이 없으니 절차는 단순하다 —
       바이너리 다운로드 → <code>fe.conf</code>/<code>be.conf</code> 수정 → 시작 → SQL로 BE 등록.</p>
     </div>
+
+<div class="mermaid">
+graph TD
+  subgraph FE["FE 전용 PM 3대"]
+    F1["FE-1<br/>Follower"]
+    F2["FE-2<br/>Follower"]
+    F3["FE-3<br/>Follower (한 대가 Leader)"]
+  end
+  subgraph BE["BE PM 약 17대 (각 256GB / SSD x8)"]
+    B1["BE-01"]
+    B2["BE-02"]
+    B3["BE-..."]
+    B17["BE-17"]
+  end
+  C["BI · 분석가 · ETL"]
+  C -->|"MySQL :9030"| FE
+  FE -->|"분배"| BE
+</div>
+<p class="diagram-caption">그림 4-1. 약 20대 PM 권장 토폴로지 — FE 3 + BE 17</p>
 
     <h2 id="steps">4.1 6단계 배포 절차 (공식 가이드)</h2>
     <ol>

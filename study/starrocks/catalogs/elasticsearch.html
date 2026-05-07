@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-8. Elasticsearch Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-es" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-8. Elasticsearch</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-8. Elasticsearch Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>v3.1부터 ES 인덱스를 SQL로 SELECT할 수 있다. ES의 검색·필터를 푸시다운하고, 다른 카탈로그와 JOIN도 가능.</p>
+    </div>
+
+    <h2 id="basic">PROPERTIES</h2>
+<pre><code>CREATE EXTERNAL CATALOG es_logs
+PROPERTIES (
+  "type"          = "es",
+  "hosts"         = "http://es1.internal:9200,http://es2.internal:9200",
+  "username"      = "starrocks",
+  "password"      = "...",
+  "ssl"           = "false",
+  "nodes_discovery" = "true",
+  "enable_keyword_sniff" = "true"
+);</code></pre>
+
+    <h2 id="features">활용</h2>
+    <ul>
+      <li>인덱스가 자동으로 테이블처럼 노출됨.</li>
+      <li>WHERE 조건 일부(=, IN, BETWEEN 등)는 ES Query DSL로 푸시다운.</li>
+      <li>다른 카탈로그(Hive, MySQL)와 JOIN 가능 — 로그 ↔ 사용자 마스터 결합 같은 시나리오.</li>
+    </ul>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>ES의 큰 GROUP BY를 그대로 던지면 ES가 OOM 위험. 무거운 집계는 StarRocks 쪽에서 끝내거나 Async MV로 캐시.</li>
+      <li>nested 필드 / multi-value 필드 매핑은 제약이 있음.</li>
+      <li>매핑이 동적으로 늘어나는 ES 인덱스는 컬럼 폭발에 유의.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>로그 검색은 ES, 분석은 StarRocks라는 보편 패턴에서, "ES에 있는 데이터 일부를 SQL로도 본다"는 용도에 적합. 평소 분석 트래픽이 많다면 ES 인덱스 → Hive/Iceberg로 일자별 백업하고, 그쪽을 보는 편이 ES 부하 측면에서 안전.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./paimon.html">← 6-7. Paimon</a>
+        <a href="./kudu.html">다음 → 6-9. Kudu</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/elasticsearch_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Elasticsearch catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

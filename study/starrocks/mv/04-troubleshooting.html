@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>7-4. MV 트러블슈팅 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mv-trouble" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 쿼리·MV / 7-4. 트러블슈팅</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>7-4. MV 트러블슈팅 — "왜 안 쓰이나" 진단</h1>
+
+    <h2 id="check-state">1) MV 상태부터 확인</h2>
+<pre><code>SHOW MATERIALIZED VIEWS WHERE NAME = 'mv_x'\G
+-- 'state' 가 ACTIVE 인가?
+-- 'is_active' 가 true 인가?
+-- 'last_refresh_state' 가 SUCCESS 인가?</code></pre>
+    <p>state가 <code>INACTIVE</code>이면 베이스 변경/스키마 차이 등으로 무효화된 상태. <code>ALTER MATERIALIZED VIEW mv_x ACTIVE;</code>로 다시 켜되, 원인부터 파악.</p>
+
+    <h2 id="check-explain">2) EXPLAIN으로 rewrite 여부</h2>
+<pre><code>SET enable_materialized_view_rewrite = true;
+EXPLAIN &lt;사용자 SQL&gt;;
+-- "RewriteByMV" 또는 "MaterializedView" 표시가 있어야 함.</code></pre>
+
+    <h2 id="cases">3) 자주 보는 원인</h2>
+
+    <h3>A. WHERE 범위 불일치</h3>
+    <p>MV의 WHERE이 사용자 쿼리보다 좁으면 사용 불가. 가급적 MV에는 WHERE를 넣지 말고, 데이터 양은 파티션·TTL로 통제.</p>
+
+    <h3>B. JOIN 종류/조건 불일치</h3>
+    <p><code>LEFT JOIN</code>으로 만든 MV에 <code>INNER JOIN</code> 쿼리, 또는 ON 조건이 살짝 다른 경우 → rewrite 안 됨.</p>
+
+    <h3>C. AVG 직접 저장</h3>
+    <p>MV에 AVG를 직접 저장했다면 롤업 불가. SUM/COUNT로 분해 저장 → 사용자 쿼리에서 <code>sum(sum_amt)/sum(cnt)</code> 형태.</p>
+
+    <h3>D. 비결정적 함수</h3>
+    <p><code>RAND()</code>, <code>NOW()</code>, <code>CURRENT_USER()</code> 등은 rewrite 차단. MV 정의에서 제거.</p>
+
+    <h3>E. stale 파티션</h3>
+    <p>베이스가 변경됐지만 MV가 따라잡지 못한 경우. <code>SHOW PARTITIONS FROM mv_x</code>의 lastRefreshTime을 확인하고 강제 리프레시.</p>
+
+    <h3>F. 외부 카탈로그 + 메타 캐시</h3>
+    <p>Hive/Iceberg 베이스에서 새 파티션이 추가됐는데 메타 캐시가 안 갱신 → MV가 인식 못 함.</p>
+<pre><code>REFRESH CATALOG hive_prod;
+REFRESH MATERIALIZED VIEW mv_x;</code></pre>
+
+    <h3>G. 외부 카탈로그 rewrite 명시 옵션</h3>
+<pre><code>ALTER MATERIALIZED VIEW mv_x
+SET ("force_external_table_query_rewrite" = "true");</code></pre>
+
+    <h2 id="task-history">4) 리프레시 잡 이력 확인</h2>
+<pre><code>SELECT task_name, state, error_message, finish_time
+FROM information_schema.task_runs
+WHERE task_name LIKE '%mv_x%'
+ORDER BY create_time DESC LIMIT 20;</code></pre>
+
+    <h2 id="logs">5) FE 로그</h2>
+    <p>Rewrite 실패 사유는 <code>fe.log</code>의 INFO/WARN 레벨에 종종 단서가 있음. 키워드: <code>Materialized view</code>, <code>rewrite</code>, <code>MV</code>.</p>
+
+    <h2 id="performance">6) MV가 쓰이는데도 느린 경우</h2>
+    <ul>
+      <li>MV의 분배 키가 쿼리 GROUP BY/JOIN 키와 일치하는가? 안 맞으면 셔플 발생.</li>
+      <li>MV의 정렬키(ORDER BY)가 쿼리 WHERE 조건에 맞는가?</li>
+      <li>MV 통계가 최신인가? <code>ANALYZE TABLE mv_x;</code></li>
+    </ul>
+
+    <h2 id="checklist">진단 체크리스트</h2>
+    <ol>
+      <li>SHOW MATERIALIZED VIEW에서 state·is_active·last_refresh_state 확인</li>
+      <li>EXPLAIN에서 RewriteByMV 표시 확인</li>
+      <li>WHERE/JOIN/AVG/비결정 함수 점검</li>
+      <li>SHOW PARTITIONS로 stale 여부</li>
+      <li>외부 카탈로그라면 REFRESH CATALOG + force 옵션</li>
+      <li>task_runs에서 실패 잡 검토</li>
+      <li>fe.log에서 rewrite 키워드</li>
+      <li>분배 키·정렬키·통계 검토</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>"MV가 안 쓰여요" 문의가 운영 단골. 본 페이지를 위키에 그대로 박아 사용자 self-serve 진단을 유도.</li>
+        <li>큰 MV가 여러 개라면 dashboard에 <code>last_refresh_state</code> stale 알람을 두면 좋습니다.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./03-trigger-refresh.html">← 7-3. 리프레시 모드</a>
+        <a href="../sql/ddl.html">다음 → SQL 레퍼런스</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/using_starrocks/Materialized_view/" target="_blank" rel="noopener">docs.starrocks.io / Materialized view</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

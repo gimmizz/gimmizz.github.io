@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>7-1. MV Query Rewrite — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mv-rewrite" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 쿼리·MV / 7-1. Rewrite</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>7-1. MV Query Rewrite — 무엇이 자동으로 바뀌나</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>옵티마이저는 사용자 SQL과 MV 정의를 비교해 자동 치환을 시도한다. 일치(<em>exact</em>) 또는 유도(<em>derivable</em>) 두 종류가 있다.</p>
+    </div>
+
+    <h2 id="enable">활성 조건</h2>
+    <ol>
+      <li>세션 변수: <code>SET enable_materialized_view_rewrite = true;</code> (기본 true)</li>
+      <li>MV 속성: <code>"enable_query_rewrite" = "true"</code></li>
+      <li>MV 상태: <code>ACTIVE</code> (가장 최근 리프레시가 성공)</li>
+      <li>베이스 테이블 데이터가 MV 리프레시 이후 의미 있게 변하지 않았거나, MV가 그 변경을 흡수할 수 있는 상태(파티션 정합)</li>
+    </ol>
+
+    <h2 id="exact-derivable">exact vs derivable</h2>
+<div class="mermaid">
+graph LR
+  Q1["SELECT dt, count(*) GROUP BY dt"]
+  MV1["MV: SELECT dt, count(*) GROUP BY dt"]
+  Q1 -- "exact match" --> MV1
+
+  Q2["SELECT dt, sum(amt) GROUP BY dt"]
+  MV2["MV: SELECT dt, channel, sum(amt) GROUP BY dt, channel"]
+  Q2 -- "derivable<br/>(dt, channel) → (dt) 가능" --> MV2
+</div>
+
+    <h2 id="works">잘 동작하는 패턴</h2>
+    <ul>
+      <li><strong>같은 GROUP BY 또는 더 거친 GROUP BY</strong> (MV가 더 세밀)</li>
+      <li><strong>WHERE</strong>가 MV의 WHERE를 포함 또는 같음 (MV가 더 광범위한 데이터를 가진다)</li>
+      <li><strong>JOIN</strong>은 MV에 같은 테이블이 같은 키로 정의되어 있어야 함</li>
+      <li><strong>윈도 함수</strong>는 일반적으로 rewrite 안 함 — pre-aggregate 형태로만</li>
+      <li><strong>외부 카탈로그</strong>(Hive/Iceberg)도 동일하게 rewrite 가능 (v3.x)</li>
+    </ul>
+
+    <h2 id="not">잘 안 되는 패턴</h2>
+    <ul>
+      <li>MV의 WHERE이 사용자 쿼리보다 더 좁음 (필요한 데이터를 못 가짐)</li>
+      <li>JOIN 종류가 다름 (LEFT vs INNER 등)</li>
+      <li>비결정적 함수 (random, current_user 등)</li>
+      <li>HAVING/QUALIFY가 MV에 미반영</li>
+      <li>MV 자체가 stale (베이스 변경을 못 따라잡음)</li>
+    </ul>
+
+    <h2 id="check">EXPLAIN으로 확인</h2>
+<pre><code>EXPLAIN SELECT dt, count(*) FROM events GROUP BY dt;
+-- 출력의 SCAN 단에 "RewriteByMV: mv_event_d" 같은 표시.
+-- 또는 v3.x의 EXPLAIN의 "MaterializedView" 섹션.
+
+-- 강제로 끔
+SELECT /*+ MV_REWRITE_OFF */ ... ;</code></pre>
+
+    <h2 id="aggregate-rollup">집계 롤업</h2>
+    <p>MV가 더 세밀한 GROUP BY를 가지면, 더 거친 쿼리는 MV에서 추가 GROUP BY로 계산 가능. SUM/COUNT/MAX/MIN은 자유롭게 롤업되지만, AVG는 보통 SUM/COUNT로 분해해야 함.</p>
+<pre><code>-- 권장: AVG를 직접 저장하지 말고 sum, cnt를 저장
+CREATE MATERIALIZED VIEW mv_amt
+AS SELECT dt, channel, sum(amt) sum_amt, count(*) cnt
+FROM events GROUP BY dt, channel;
+
+-- 사용자 쿼리는 이렇게 쓰면 자동 rewrite + AVG 계산 가능
+SELECT dt, sum(sum_amt)/sum(cnt) AS avg_amt FROM ... ;</code></pre>
+
+    <h2 id="external-rewrite">외부 카탈로그 MV (v3.x)</h2>
+<pre><code>CREATE MATERIALIZED VIEW mv_hive_d
+PARTITION BY dt DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+PROPERTIES ("enable_query_rewrite"="true", "force_external_table_query_rewrite"="true")
+AS SELECT date_trunc('day', event_time) dt, user_id, count(*) cnt
+   FROM hive_prod.dwh.events
+   GROUP BY 1, 2;</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>MV 후보를 결정할 땐 <strong>일정 기간(1주)의 audit log에서 가장 자주 도는 SQL Top-N</strong>을 추출 → MV 정의로 변환.</li>
+        <li>Rewrite가 안 되는 이유는 보통 (1) stale, (2) WHERE 좁음, (3) JOIN 종류 불일치 셋 중 하나.</li>
+        <li>운영에서 <code>enable_query_rewrite</code>를 끄지 마세요 — 기본 활성이 안전.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../06-query-mv.html">← 7. 쿼리·MV</a>
+        <a href="./02-partitioning.html">다음 → 7-2. 파티션 정합</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/using_starrocks/query_rewrite_with_materialized_views/" target="_blank" rel="noopener">docs.starrocks.io / Query rewrite with MV</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

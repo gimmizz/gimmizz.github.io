@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MIG-2. ClickHouse → StarRocks — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mig-ch" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 마이그레이션 / MIG-2. ClickHouse → SR</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>MIG-2. ClickHouse → StarRocks</h1>
+
+    <h2 id="why">왜 옮기나</h2>
+    <ul>
+      <li>분산 JOIN 한계 → SR의 MPP + CBO로 다중 조인 강화.</li>
+      <li>UPSERT/DELETE → SR의 Primary Key 모델.</li>
+      <li>외부 카탈로그(Lake) 통합 → SR의 다양한 External Catalog.</li>
+      <li>MV 자동 재작성 → CH의 Projection보다 유연.</li>
+    </ul>
+
+    <h2 id="engine">테이블 엔진 매핑</h2>
+    <table>
+      <thead><tr><th>ClickHouse</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>MergeTree</td><td>Duplicate Key 또는 Aggregate Key</td></tr>
+        <tr><td>ReplacingMergeTree</td><td>Primary Key 또는 Unique Key</td></tr>
+        <tr><td>SummingMergeTree</td><td>Aggregate Key (SUM)</td></tr>
+        <tr><td>AggregatingMergeTree</td><td>Aggregate Key (BITMAP_UNION/HLL_UNION 등)</td></tr>
+        <tr><td>Distributed Engine</td><td>SR 자체가 분산 — 별도 엔진 불필요</td></tr>
+        <tr><td>Materialized View</td><td>Sync MV / Async MV</td></tr>
+        <tr><td>Dictionary</td><td>차원 테이블 + Colocate Group</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="schema">스키마 변환 예</h2>
+<pre><code>-- ClickHouse
+CREATE TABLE events
+(
+  event_time DateTime,
+  user_id    UInt64,
+  event_type LowCardinality(String),
+  url        String
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(event_time)
+ORDER BY (event_time, user_id);
+
+-- StarRocks 변환
+CREATE TABLE events (
+  event_time DATETIME NOT NULL,
+  user_id    BIGINT,
+  event_type VARCHAR(32),    -- 자동 dictionary 처리 (저카디널리티)
+  url        STRING
+)
+DUPLICATE KEY(event_time, user_id)
+PARTITION BY date_trunc('day', event_time)
+DISTRIBUTED BY HASH(user_id)
+PROPERTIES ("replication_num"="3", "compression"="ZSTD");</code></pre>
+
+    <h2 id="sql">SQL 다이얼렉트 차이</h2>
+    <ul>
+      <li><code>arrayMap</code>·<code>arrayFilter</code>같은 람다 → SR은 일반 SQL/UDF.</li>
+      <li><code>uniq</code>/<code>uniqExact</code> → <code>approx_count_distinct</code> 또는 BITMAP.</li>
+      <li><code>quantile</code> → <code>percentile_approx</code>.</li>
+      <li><code>SAMPLE</code> → SR은 ANSI 표준 <code>TABLESAMPLE</code> 일부 지원.</li>
+      <li><code>FINAL</code> 키워드(Replacing 강제 머지) → SR은 PK 테이블이라면 불필요.</li>
+    </ul>
+
+    <h2 id="data">데이터 이전</h2>
+<pre><code># ClickHouse → parquet
+clickhouse-client --query="SELECT * FROM events WHERE dt='2026-05-07' FORMAT Parquet" \
+  &gt; /tmp/events_20260507.parquet
+
+# parquet → S3/HDFS 적재 후 SR INSERT
+INSERT INTO mart.events
+SELECT * FROM FILES("path"="s3://bucket/events_20260507.parquet","format"="parquet", ...);</code></pre>
+
+    <h2 id="dual">Dual-write로 안전한 컷오버</h2>
+    <ol>
+      <li>적재 파이프라인을 CH와 SR에 동시 적재(Dual write).</li>
+      <li>주요 SQL 결과 비교 (자동화).</li>
+      <li>BI 트래픽을 SR로 점진 이동 — Canary.</li>
+      <li>한 달 안정 운영 후 CH 적재 중단, 그 후 read-only 보존 → 폐기.</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>CH의 LowCardinality/Compact MergeTree 패턴은 SR에서 별도 노력 없이 자동 처리.</li>
+        <li>분산 JOIN 워크로드는 SR이 압도적으로 안정적 — 가장 큰 이전 동기.</li>
+        <li>CH의 시스템 함수 의존(예: arrayMap)이 많은 ETL은 dbt-style 표준 SQL로 재작성 권장.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./from-mysql.html">← MIG-1. MySQL</a>
+        <a href="./from-trino.html">다음 → MIG-3. Trino</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

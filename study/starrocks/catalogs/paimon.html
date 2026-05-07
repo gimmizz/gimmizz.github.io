@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-7. Paimon Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-paimon" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-7. Paimon</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-7. Paimon Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>Apache Paimon은 Flink Stream → Lake 형식. StarRocks는 v3.1부터 Paimon 테이블 SELECT를 지원한다.</p>
+    </div>
+
+    <h2 id="basic">PROPERTIES — Filesystem 카탈로그</h2>
+<pre><code>CREATE EXTERNAL CATALOG paimon_fs
+PROPERTIES (
+  "type"                = "paimon",
+  "paimon.catalog.type" = "filesystem",
+  "paimon.catalog.warehouse" = "s3://paimon/warehouse",
+  "aws.s3.endpoint"     = "https://minio.internal:9000",
+  "aws.s3.access_key"   = "...",
+  "aws.s3.secret_key"   = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);
+
+# HDFS 위에 두는 경우
+"paimon.catalog.warehouse" = "hdfs://nn/warehouse"</code></pre>
+
+    <h2 id="hive-cat">PROPERTIES — Hive 카탈로그</h2>
+<pre><code>CREATE EXTERNAL CATALOG paimon_hms
+PROPERTIES (
+  "type"                = "paimon",
+  "paimon.catalog.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083",
+  "paimon.catalog.warehouse" = "hdfs://nn/warehouse"
+);</code></pre>
+
+    <h2 id="features">활용</h2>
+    <ul>
+      <li>Snapshot / Time Travel 일부 지원.</li>
+      <li>Stream 적재가 Flink Paimon 측에서 일어나고, StarRocks는 분석 가속기 역할.</li>
+      <li>StarRocks에서 Paimon 쓰기는 미지원.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>이미 Flink CDC + Paimon으로 실시간 레이크하우스를 구축 중이라면, StarRocks를 별도 OLAP 적재 없이 직접 분석 엔진으로 붙이는 패턴이 효과적입니다.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./jdbc-mysql.html">← 6-6. JDBC</a>
+        <a href="./elasticsearch.html">다음 → 6-8. Elasticsearch</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Paimon catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

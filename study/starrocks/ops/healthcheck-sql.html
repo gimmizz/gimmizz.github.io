@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPS-2. 헬스체크 SQL — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-health" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / OPS-2. 헬스체크</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>OPS-2. 헬스체크 SQL — cron으로 돌릴 수 있는 형태</h1>
+
+    <p>아래 SQL을 5~15분 주기로 cron + Slack/웍스 알림에 묶어두면 사고 감지가 빨라집니다.</p>
+
+    <h2 id="alive">노드 alive</h2>
+<pre><code>-- FE alive 수 (3 이어야 함)
+SELECT count(*) AS fe_alive
+FROM information_schema.frontends WHERE alive = 'true';
+
+-- BE alive 수 (배포한 BE 수와 같아야 함)
+SELECT count(*) AS be_alive
+FROM information_schema.backends WHERE alive = 'true';</code></pre>
+
+    <h2 id="disk">디스크</h2>
+<pre><code>-- BE 디스크 사용률 ≥ 80% 인 노드
+SELECT BackendId, IP, MaxDiskUsedPct
+FROM information_schema.backends
+WHERE alive='true' AND MaxDiskUsedPct &gt;= 80;</code></pre>
+
+    <h2 id="tablet">불건전 Tablet</h2>
+<pre><code>-- 불건전(미복구/오프라인) tablet 수 — 0 이어야 함
+SHOW PROC '/statistic';
+-- 또는
+SELECT count(*) FROM information_schema.tablet_schedules
+WHERE state IN ('PENDING','RUNNING');</code></pre>
+
+    <h2 id="compaction">컴팩션 적체</h2>
+<pre><code>-- BE별 max compaction score
+SELECT BackendId, IP, TabletNum, MaxCompactionScore
+FROM information_schema.backends
+ORDER BY MaxCompactionScore DESC LIMIT 10;
+-- score &gt; 100 이면 적체 알람</code></pre>
+
+    <h2 id="loads">적재 잡</h2>
+<pre><code>-- 비정상 종료 적재
+SELECT label, state, type, error_msg, finish_time
+FROM information_schema.loads
+WHERE state IN ('CANCELLED','FAILED')
+  AND create_time &gt;= NOW() - INTERVAL 1 HOUR;
+
+-- Routine Load PAUSED
+SHOW ROUTINE LOAD\G
+-- 또는
+SELECT name, state, error_log_urls
+FROM information_schema.routine_loads
+WHERE state = 'PAUSED';</code></pre>
+
+    <h2 id="mv">MV 상태</h2>
+<pre><code>-- 마지막 리프레시가 24시간 이상 지난 MV
+SELECT TABLE_NAME, last_refresh_time, last_refresh_state, is_active
+FROM information_schema.materialized_views
+WHERE is_active = 'true'
+  AND last_refresh_time &lt; NOW() - INTERVAL 24 HOUR;</code></pre>
+
+    <h2 id="long">장기 실행 쿼리</h2>
+<pre><code>-- 30분 이상 도는 쿼리
+SELECT id, user, host, db, command, time, state, info
+FROM information_schema.processlist
+WHERE time &gt; 1800
+ORDER BY time DESC;</code></pre>
+
+    <h2 id="data-cache">Data Cache 적중률</h2>
+<pre><code>-- 최근 1시간 BE Data Cache 적중률
+-- (Prometheus의 be_data_cache_hit_ratio 메트릭 활용 권장)</code></pre>
+
+    <h2 id="script">하나의 헬스체크 스크립트 예</h2>
+<pre><code>#!/usr/bin/env bash
+SR="mysql -h fe1 -P 9030 -u sr_check -p$SR_PWD -N -B -e"
+
+FE_ALIVE=$($SR "SELECT count(*) FROM information_schema.frontends WHERE alive='true'")
+BE_ALIVE=$($SR "SELECT count(*) FROM information_schema.backends  WHERE alive='true'")
+DISK_BAD=$($SR "SELECT count(*) FROM information_schema.backends WHERE MaxDiskUsedPct &gt;= 90")
+COMP_BAD=$($SR "SELECT count(*) FROM information_schema.backends WHERE MaxCompactionScore &gt; 100")
+RL_PAUSED=$($SR "SELECT count(*) FROM information_schema.routine_loads WHERE state='PAUSED'")
+
+if [ "$FE_ALIVE" -lt 3 ] || [ "$BE_ALIVE" -lt 17 ] || [ "$DISK_BAD" -gt 0 ] \
+   || [ "$COMP_BAD" -gt 0 ] || [ "$RL_PAUSED" -gt 0 ]; then
+  echo "ALERT: FE=$FE_ALIVE BE=$BE_ALIVE diskBad=$DISK_BAD compBad=$COMP_BAD rlPaused=$RL_PAUSED" \
+    | /opt/notify-works.sh
+fi</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>알람은 <strong>5분 지속 조건</strong>으로 묶어 일시적 노이즈 차단.</li>
+        <li>전용 read-only 계정(<code>sr_check</code>)을 만들고 information_schema SELECT만 부여.</li>
+        <li>Prometheus 알람과 SQL 헬스체크를 병행하면 사각지대가 거의 없음.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./ansible-deploy.html">← OPS-1</a>
+        <a href="./upgrade-runbook.html">다음 → OPS-3. 업그레이드</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/information-schema/" target="_blank" rel="noopener">docs.starrocks.io / Information schema</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYS-1. Compaction — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-compact" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 시스템 내부 / SYS-1. Compaction</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SYS-1. Compaction — 컴팩션의 종류와 동작</h1>
+
+    <h2 id="why">왜 필요한가</h2>
+    <p>BE는 적재가 들어올 때마다 <strong>새 RowSet(=Segment 그룹)</strong>를 만든다. 시간이 지나면 한 Tablet에 RowSet이 누적되어 쿼리 시 머지 비용이 커진다. Compaction은 작은 RowSet들을 모아 큰 RowSet으로 통합하는 백그라운드 작업.</p>
+
+<div class="mermaid">
+graph LR
+  L1["새 적재 = 작은 RowSet 다수"]
+  L1 --> CC["Cumulative Compaction<br/>최근 RowSet들을 한 RowSet으로"]
+  CC --> BC["Base Compaction<br/>오래된 base + cumulative을 통합"]
+  PK["PK Update Compaction<br/>(PK 테이블 전용)"]</div>
+
+    <h2 id="kinds">3 가지 종류</h2>
+    <table>
+      <thead><tr><th>종류</th><th>대상</th><th>동작</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Cumulative</strong></td><td>최근 작은 RowSet 다수</td><td>한 cumulative RowSet으로 합침. 가장 자주 일어남.</td></tr>
+        <tr><td><strong>Base</strong></td><td>cumulative + 기존 base</td><td>가장 큰 base RowSet으로 통합. 비용 큰 작업.</td></tr>
+        <tr><td><strong>Update</strong> (PK 테이블)</td><td>delete-vector + base</td><td>delete 마커를 base에 반영. PK 테이블 쓰기 후 정리.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="score">Compaction Score</h2>
+    <p>각 Tablet에 부여되는 적체 지표. RowSet 수와 크기 분포를 기반. 일반적으로 100을 넘으면 적체 알람.</p>
+<pre><code>SELECT BackendId, IP, MaxCompactionScore
+FROM information_schema.backends
+ORDER BY MaxCompactionScore DESC LIMIT 10;</code></pre>
+
+    <h2 id="config">관련 BE 파라미터</h2>
+<pre><code># be.conf
+# 디스크당 워커 수
+base_compaction_num_threads_per_disk        = 1
+cumulative_compaction_num_threads_per_disk  = 1
+update_compaction_num_threads_per_disk      = 1     # PK 테이블
+
+# 동시 cumulative compaction 최대
+max_cumulative_compaction_num_singleton_deltas = 1000
+
+# 메모리 한도
+compaction_mem_limit = 10%
+
+# 우선순위
+cumulative_compaction_skip_window_seconds = 30      # 최근 30초 이내 RowSet은 건너뜀</code></pre>
+
+    <h2 id="manual">수동 트리거 (긴급 시)</h2>
+<pre><code>-- 특정 Tablet 강제 compaction
+ADMIN SET BACKEND TABLET COMPACTION TYPE = "BASE" FOR TABLET 12345;
+-- 또는 HTTP API
+curl -X POST http://be1:8040/api/compaction/run?tablet_id=12345&compaction_type=base</code></pre>
+
+    <h2 id="patterns">자주 적체되는 패턴</h2>
+    <ul>
+      <li>너무 작은 batch로 빈번하게 적재 (Stream Load 1초마다 등) → Cumulative 적체.</li>
+      <li>PK 테이블에 UPSERT가 폭주 → Update Compaction 부족.</li>
+      <li>디스크당 워커가 1인데 워크로드 증가 → 워커 수 늘리기.</li>
+      <li>BE 메모리 부족 → compaction이 throttling.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 17 BE × 디스크 8 환경에서 PK 테이블이 많다면 <code>update_compaction_num_threads_per_disk = 2</code>부터 시작해 모니터링.</li>
+        <li>적재 batch는 <strong>너무 작게 자주</strong> 보내지 말 것 — 한 번에 5~10초/수만 행 단위가 안정적.</li>
+        <li>Compaction이 쿼리 IO와 경쟁 — 워커 수와 <code>compaction_mem_limit</code>의 trade-off를 모니터링하면서 조정.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../ops/backup-runbook.html">← OPS-4</a>
+        <a href="./storage-format.html">다음 → SYS-2. 스토리지 포맷</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/Configuration/" target="_blank" rel="noopener">docs.starrocks.io / Configuration</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

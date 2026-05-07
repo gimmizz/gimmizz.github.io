@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P-1. Docker 5분 퀵스타트 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="practice-docker" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 실습 / P-1. Docker 퀵스타트</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>P-1. 노트북에서 5분 만에 띄우기</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 목표</div>
+      <p>로컬 노트북에서 Docker로 단일 노드 StarRocks를 띄우고, MySQL CLI로 첫 SQL을 실행한다.</p>
+    </div>
+
+    <h2>준비물</h2>
+    <ul>
+      <li>Docker Desktop (Mac/Windows) 또는 Docker Engine (Linux)</li>
+      <li>MySQL CLI 또는 DBeaver</li>
+      <li>여유 메모리 ≥ 4GB</li>
+    </ul>
+
+    <div class="steps-container">
+      <div class="step">
+        <strong>StarRocks Allin1 컨테이너 실행</strong>
+<pre><code>docker run -p 9030:9030 -p 8030:8030 -p 8040:8040 \
+  -itd --name sr-quickstart \
+  starrocks/allin1-ubuntu:latest</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>FE가 ready 될 때까지 대기 (~30초)</strong>
+<pre><code>docker logs -f sr-quickstart  # "FE started" 비슷한 로그 확인 후 Ctrl-C</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>MySQL CLI로 접속</strong>
+<pre><code>mysql -h 127.0.0.1 -P 9030 -u root -p
+# (비밀번호 없음 — Enter)</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>첫 데이터베이스/테이블 만들기</strong>
+<pre><code>CREATE DATABASE demo;
+USE demo;
+
+CREATE TABLE quick_test (
+  id   BIGINT NOT NULL,
+  name VARCHAR(32),
+  ts   DATETIME
+)
+PRIMARY KEY(id)
+DISTRIBUTED BY HASH(id);
+
+INSERT INTO quick_test VALUES
+  (1, 'alice', NOW()),
+  (2, 'bob',   NOW()),
+  (3, 'carol', NOW());
+
+SELECT * FROM quick_test;
+SHOW BACKENDS\G
+SHOW FRONTENDS\G</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>웹 UI 확인</strong>
+        <ul>
+          <li>FE: <code>http://127.0.0.1:8030</code></li>
+          <li>BE: <code>http://127.0.0.1:8040</code></li>
+        </ul>
+      </div>
+
+      <div class="step">
+        <strong>정리</strong>
+<pre><code>docker stop sr-quickstart && docker rm sr-quickstart</code></pre>
+      </div>
+    </div>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>Allin1 이미지는 학습/실험 전용. 운영 클러스터는 <a href="../04-deployment.html">4장 배포</a>의 PM 절차로 구축. Allin1로 익힌 SQL/문법은 그대로 운영에서도 통하므로, 새 사용자는 이 단계부터 시작하는 게 좋음.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../11-security.html">← 5-4. 보안</a>
+        <a href="./02-first-table-and-load.html">다음 → P-2. 테이블·적재</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/quick_start/" target="_blank" rel="noopener">docs.starrocks.io / Quick Start</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

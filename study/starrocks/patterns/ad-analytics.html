@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAT-4. 광고 분석 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="pat-ad" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 사용 사례 / PAT-4. 광고 분석</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>PAT-4. 광고 분석 패턴</h1>
+
+    <h2 id="goal">특징</h2>
+    <ul>
+      <li>고동시성 (수백~수천 광고주가 자기 대시보드를 동시에)</li>
+      <li>다차원 (캠페인 × 매체 × 디바이스 × 지역 × 시간 × ...)</li>
+      <li>실시간(분 단위) + 정기(일 단위) 혼재</li>
+      <li>UV·코호트(고유 사용자) 분석이 핵심 KPI</li>
+    </ul>
+
+    <h2 id="schema">스키마</h2>
+<pre><code>-- 노출/클릭 raw (가장 큰 fact)
+CREATE TABLE ad.imp_log (
+  ts          DATETIME NOT NULL,
+  campaign_id BIGINT,
+  creative_id BIGINT,
+  user_id     BIGINT,
+  device      VARCHAR(16),
+  region      VARCHAR(8),
+  cost        DECIMAL(18,4),
+  imp         TINYINT,
+  click       TINYINT
+)
+DUPLICATE KEY(ts, campaign_id)
+PARTITION BY date_trunc('day', ts)
+DISTRIBUTED BY HASH(campaign_id)
+PROPERTIES (
+  "replication_num"="3",
+  "compression"="ZSTD",
+  "dynamic_partition.enable"="true",
+  "dynamic_partition.time_unit"="DAY",
+  "dynamic_partition.start"="-180",
+  "dynamic_partition.end"="3",
+  "bloom_filter_columns"="campaign_id, creative_id, user_id"
+);
+
+-- 정확 UV용 Bitmap aggregate
+CREATE TABLE ad.uv_d (
+  log_date    DATE NOT NULL,
+  campaign_id BIGINT NOT NULL,
+  device      VARCHAR(16) NOT NULL,
+  uv          BITMAP BITMAP_UNION
+)
+AGGREGATE KEY(log_date, campaign_id, device)
+DISTRIBUTED BY HASH(campaign_id);
+
+-- 캠페인 차원 (작음, colocate group)
+CREATE TABLE ad.dim_campaign (
+  campaign_id BIGINT NOT NULL,
+  advertiser  VARCHAR(64),
+  product     VARCHAR(64),
+  start_dt    DATE
+)
+PRIMARY KEY(campaign_id)
+DISTRIBUTED BY HASH(campaign_id) BUCKETS 16
+PROPERTIES ("replication_num"="3", "colocate_with"="g_campaign");</code></pre>
+
+    <h2 id="mvs">MV 패턴</h2>
+<pre><code>-- 분 단위 트렌드
+CREATE MATERIALIZED VIEW ad.mv_imp_minute
+PARTITION BY dt DISTRIBUTED BY HASH(campaign_id)
+REFRESH ASYNC EVERY (INTERVAL 1 MINUTE)
+AS
+SELECT date_trunc('minute', ts) AS m,
+       date_trunc('day',    ts) AS dt,
+       campaign_id,
+       sum(imp)   AS imp,
+       sum(click) AS clk,
+       sum(cost)  AS cost
+FROM ad.imp_log GROUP BY 1, 2, 3;
+
+-- 시간 단위 다차원 (장기 보존)
+CREATE MATERIALIZED VIEW ad.mv_imp_hour_dim
+PARTITION BY dt DISTRIBUTED BY HASH(campaign_id)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+AS
+SELECT date_trunc('hour', ts) h,
+       date_trunc('day',  ts) dt,
+       campaign_id, creative_id, device, region,
+       sum(imp) imp, sum(click) clk, sum(cost) cost
+FROM ad.imp_log GROUP BY 1, 2, 3, 4, 5, 6;</code></pre>
+
+    <h2 id="kpi">대시보드 SQL 예</h2>
+<pre><code>-- 광고주 대시보드: 오늘 캠페인별 KPI
+SELECT
+  c.advertiser, c.product,
+  sum(l.imp) imp, sum(l.click) clk,
+  sum(l.click)/NULLIF(sum(l.imp),0) AS ctr,
+  sum(l.cost) cost,
+  sum(l.cost)/NULLIF(sum(l.click),0) AS cpc
+FROM ad.imp_log l
+JOIN ad.dim_campaign c ON l.campaign_id = c.campaign_id
+WHERE l.ts &gt;= CURDATE() AND c.advertiser = 'A12345'
+GROUP BY c.advertiser, c.product
+ORDER BY cost DESC;
+
+-- 정확 UV (캠페인 × 7일)
+SELECT campaign_id,
+       bitmap_count(bitmap_union(uv)) AS uv_7d
+FROM ad.uv_d
+WHERE log_date BETWEEN CURDATE() - INTERVAL 7 DAY AND CURDATE()
+GROUP BY campaign_id;</code></pre>
+
+    <h2 id="rg">Resource Group 분리</h2>
+<pre><code>CREATE RESOURCE GROUP ad_dashboard
+WITH ('cpu_core_limit'='8','mem_limit'='30%','concurrency_limit'='200','type'='normal');
+
+CREATE RESOURCE GROUP ad_etl
+WITH ('cpu_core_limit'='24','mem_limit'='50%','concurrency_limit'='8','type'='normal');</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>고동시성이 본 패턴의 핵심</strong>. <code>concurrency_limit</code>을 dashboard용에 충분히 높이고, MV로 응답을 가볍게 유지.</li>
+        <li><strong>colocate group으로 fact ↔ dim JOIN 셔플 제거</strong> — campaign_id를 dim/fact 모두 같은 분배·colocate.</li>
+        <li><strong>BITMAP UV</strong>를 사전 집계 — UV 정확도가 비즈니스 KPI라 HLL보다 BITMAP 권장.</li>
+        <li>광고 정산 데이터(cost)는 정확 합계가 필요 → MV 리프레시 정합 체크 필수. task_runs 알람.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./lakehouse.html">← PAT-3</a>
+        <a href="../integrations/bi-tools.html">다음 → INT-1. BI 도구</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

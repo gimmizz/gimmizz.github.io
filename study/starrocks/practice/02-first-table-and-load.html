@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P-2. 첫 테이블 · Stream Load — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="practice-first" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 실습 / P-2. 첫 테이블·적재</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>P-2. 첫 테이블 · Stream Load 실습</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 목표</div>
+      <p>Primary Key 테이블을 만들고, CSV를 Stream Load로 적재한 뒤 UPSERT/DELETE까지 확인한다.</p>
+    </div>
+
+    <div class="steps-container">
+      <div class="step">
+        <strong>테이블 생성</strong>
+<pre><code>CREATE DATABASE IF NOT EXISTS shop;
+USE shop;
+
+CREATE TABLE orders (
+  order_id   BIGINT NOT NULL,
+  user_id    BIGINT,
+  status     VARCHAR(32),
+  amount     DECIMAL(18,2),
+  updated_at DATETIME
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('day', updated_at)
+DISTRIBUTED BY HASH(order_id)
+PROPERTIES (
+  "replication_num" = "1",          -- 단일 노드 데모
+  "enable_persistent_index" = "true"
+);</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>샘플 CSV 만들기</strong>
+<pre><code>cat &gt; /tmp/orders.csv &lt;&lt;EOF
+1,100,paid,12345.00,2026-05-07 10:00:00
+2,101,pending,5000.00,2026-05-07 10:01:00
+3,100,paid,890.00,2026-05-07 10:02:00
+EOF</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>Stream Load로 적재</strong>
+<pre><code>curl --location-trusted -u root: \
+  -H "label:orders_init_001" \
+  -H "format:CSV" \
+  -H "column_separator:," \
+  -H "columns:order_id,user_id,status,amount,updated_at" \
+  -T /tmp/orders.csv \
+  http://127.0.0.1:8030/api/shop/orders/_stream_load</code></pre>
+        <p>응답 JSON에서 <code>"Status":"Success"</code> 확인.</p>
+      </div>
+
+      <div class="step">
+        <strong>SELECT 결과 확인</strong>
+<pre><code>USE shop;
+SELECT * FROM orders ORDER BY order_id;</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>UPSERT 적용 — 같은 PK로 다시 적재</strong>
+<pre><code>cat &gt; /tmp/orders_update.csv &lt;&lt;EOF
+1,100,refunded,0.00,2026-05-07 11:00:00
+EOF
+
+curl --location-trusted -u root: \
+  -H "label:orders_upd_001" \
+  -H "format:CSV" \
+  -H "column_separator:," \
+  -H "columns:order_id,user_id,status,amount,updated_at" \
+  -T /tmp/orders_update.csv \
+  http://127.0.0.1:8030/api/shop/orders/_stream_load
+
+# 다시 SELECT — order_id=1이 'refunded'로 갱신됐는지 확인
+SELECT * FROM orders WHERE order_id = 1;</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>DELETE 적용</strong>
+<pre><code>cat &gt; /tmp/orders_del.csv &lt;&lt;EOF
+2
+EOF
+
+curl --location-trusted -u root: \
+  -H "label:orders_del_001" \
+  -H "format:CSV" \
+  -H "column_separator:," \
+  -H "columns:order_id" \
+  -H "merge_type:DELETE" \
+  -T /tmp/orders_del.csv \
+  http://127.0.0.1:8030/api/shop/orders/_stream_load
+
+SELECT count(*) FROM orders;  -- 2건 남음</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>적재 이력 확인</strong>
+<pre><code>SHOW STREAM LOAD FROM shop\G</code></pre>
+      </div>
+    </div>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>운영 환경에서 Stream Load는 ETL 도구(Airflow Operator, Kettle, 자체 스크립트)에 통합. label은 <code>{table}_{date}_{seq}</code>로 표준화. 실패 시 ErrorURL을 ETL 로그에 기록.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./01-docker-quickstart.html">← P-1. Docker</a>
+        <a href="./03-hive-on-minio.html">다음 → P-3. Hive 실습</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/StreamLoad/" target="_blank" rel="noopener">docs.starrocks.io / Stream Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>7-2. MV 파티션 정합 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mv-partition" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 쿼리·MV / 7-2. 파티션 정합</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>7-2. MV 파티션 정합 (Partition Alignment)</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>MV의 파티션을 베이스 테이블의 파티션에 맞추면 (1) Incremental Refresh가 가능하고 (2) Rewrite가 stale 파티션만 우회한다. 베이스 일자 파티션이라면 MV도 일자 파티션.</p>
+    </div>
+
+    <h2 id="define">베이스와 같은 키로 PARTITION BY 정의</h2>
+<pre><code>CREATE MATERIALIZED VIEW mv_event_user_d
+PARTITION BY dt                 -- 베이스의 파티션 키와 일치
+DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+AS
+SELECT date_trunc('day', event_time) AS dt,
+       user_id,
+       count(*) AS cnt
+FROM events
+GROUP BY 1, 2;</code></pre>
+    <p>여기서 <code>events</code>는 <code>PARTITION BY date_trunc('day', event_time)</code>로 정의되어 있고,
+    MV의 <code>dt</code>는 그것과 같은 표현식이라 옵티마이저가 1:1 매핑을 인식.</p>
+
+    <h2 id="incremental">Incremental Refresh — 변경된 파티션만</h2>
+<pre><code>-- 베이스의 dt='2026-05-07' 파티션이 변경되면, MV의 같은 dt 파티션만 다시 만든다.
+REFRESH MATERIALIZED VIEW mv_event_user_d
+        PARTITION START('2026-05-07') END('2026-05-08');</code></pre>
+
+    <h2 id="props">관련 PROPERTIES</h2>
+    <table>
+      <thead><tr><th>키</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>partition_refresh_number</code></td><td>한 번에 리프레시할 파티션 수 (기본 1)</td></tr>
+        <tr><td><code>excluded_trigger_tables</code></td><td>이 테이블 변경은 MV 갱신을 트리거하지 않음 (예: 차원 테이블)</td></tr>
+        <tr><td><code>auto_refresh_partitions_limit</code></td><td>자동 리프레시 시 최근 N개 파티션만</td></tr>
+        <tr><td><code>partition_ttl_number</code></td><td>MV의 파티션 보존 개수 (오래된 자동 삭제)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="multi-base">다중 베이스 테이블 + 파티션 정합</h2>
+    <p>여러 테이블을 JOIN하는 MV에서 파티션 정합은 <strong>대표(파티션 reference) 테이블 하나</strong>를 기준으로 한다. 보통 가장 큰 사실(fact) 테이블이 파티션 키 제공자.</p>
+<pre><code>CREATE MATERIALIZED VIEW mv_join_d
+PARTITION BY dt
+DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+AS
+SELECT
+  date_trunc('day', e.event_time) dt,
+  e.user_id, u.grade, count(*) cnt
+FROM events e            -- 파티션 reference (큰 fact)
+LEFT JOIN dim_user u ON e.user_id = u.user_id
+GROUP BY 1, 2, 3;</code></pre>
+    <p>이때 <code>dim_user</code>는 작은 차원 테이블이라 거의 변하지 않음 → <code>excluded_trigger_tables</code>에 추가하면 dim_user 변경으로 MV가 통째로 리프레시되는 사고를 막을 수 있다.</p>
+
+    <h2 id="hive-mv">외부 카탈로그 베이스</h2>
+    <p>Hive/Iceberg 베이스의 MV도 파티션 정합 가능. 단 메타 캐시가 stale이면 새 파티션을 인식 못 할 수 있어 <code>enable_background_refresh_connector_metadata</code>·<code>REFRESH CATALOG</code>를 함께 운영.</p>
+
+    <h2 id="check">상태 점검</h2>
+<pre><code>SHOW MATERIALIZED VIEW mv_event_user_d\G
+SHOW PARTITIONS FROM mv_event_user_d;
+-- 각 파티션의 isCacheValid / lastRefreshTime 등으로 정합성 확인.</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>파티션 정합은 MV 운영의 핵심</strong>. 풀 리프레시는 약 17 BE 환경에서도 곧 비싸짐. 처음부터 Incremental 가능한 형태로 설계.</li>
+        <li>차원 테이블은 <code>excluded_trigger_tables</code>로 빼두기 — 차원 변경은 보통 야간에 dim_user 갱신만 하고, MV는 다음 정기 리프레시에서 따라잡음.</li>
+        <li><code>partition_ttl_number</code>로 MV 파티션 보존 기간을 명시하면 디스크 사용량이 안정적.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./01-rewrite-conditions.html">← 7-1. Rewrite</a>
+        <a href="./03-trigger-refresh.html">다음 → 7-3. 리프레시 모드</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/using_starrocks/Materialized_view/" target="_blank" rel="noopener">docs.starrocks.io / Materialized view</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

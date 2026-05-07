@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INT-1. BI 도구 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-bi" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 외부 도구 / INT-1. BI</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>INT-1. BI 도구 연결 (Tableau · Superset · Metabase · Redash)</h1>
+
+    <p>StarRocks는 MySQL 와이어 프로토콜이라 <strong>"MySQL"</strong>로 연결하면 거의 모든 BI 도구가 즉시 동작합니다.
+    포트는 <code>9030</code>, 사용자 비밀번호는 SR 사용자 그대로.</p>
+
+    <h2 id="tableau">Tableau</h2>
+    <ol>
+      <li>커넥터: "MySQL" 선택 (또는 "JDBC" + MySQL Connector/J).</li>
+      <li>호스트: <code>fe1</code> (또는 LB), 포트: 9030, 사용자: SR 계정.</li>
+      <li>드라이버 경로 안내가 뜨면 <a href="https://dev.mysql.com/downloads/connector/j/" target="_blank" rel="noopener">MySQL Connector/J</a> 다운로드 후 지정.</li>
+      <li>(선택) 드라이버 옵션: <code>useSSL=false&allowPublicKeyRetrieval=true</code></li>
+    </ol>
+
+    <h2 id="superset">Apache Superset</h2>
+<pre><code>pip install mysqlclient
+# 또는
+pip install starrocks   # 공식 SR Superset 다이얼렉트(있는 버전 기준)
+
+# Superset Database 등록 시 SQLAlchemy URI:
+mysql://user:password@fe1:9030/default_catalog
+# 또는 SR 다이얼렉트 사용 시
+starrocks://user:password@fe1:9030/default_catalog</code></pre>
+
+    <h2 id="metabase">Metabase</h2>
+    <ol>
+      <li>"Add a database" → "MySQL" 선택.</li>
+      <li>호스트/포트/사용자/DB 입력. DB 이름은 <code>default_catalog.&lt;database&gt;</code> 또는 <code>&lt;database&gt;</code>.</li>
+    </ol>
+
+    <h2 id="redash">Redash</h2>
+    <p>Data Source: "MySQL" (또는 RDS MySQL). 호스트/포트/사용자/암호.</p>
+
+    <h2 id="dbeaver">DBeaver / DataGrip (분석 IDE)</h2>
+    <ul>
+      <li>MySQL 드라이버 그대로 사용. <em>Driver Properties</em>에 <code>useSSL=false</code> 추가.</li>
+      <li>또는 StarRocks 전용 드라이버 옵션을 추가하면 더 정확한 메타 표시.</li>
+    </ul>
+
+    <h2 id="patterns">베스트 프랙티스</h2>
+    <ul>
+      <li>BI에는 <strong>읽기 전용 계정</strong>만 — RBAC로 mart DB SELECT만.</li>
+      <li>BI 트래픽은 <code>rg_bi</code> Resource Group에 묶고 <code>concurrency_limit</code> 충분히.</li>
+      <li>FE LB 뒤에 두면 한 FE 다운에도 무중단.</li>
+      <li>Tableau Extracts는 SR이 충분히 빠르므로 거의 불필요. Live Query 권장.</li>
+    </ul>
+
+    <h2 id="catalog-bi">External Catalog를 BI에서</h2>
+    <p>BI 도구의 DB 선택에서 다른 카탈로그도 보고 싶다면 사용자에게 카탈로그 USAGE 권한 부여:</p>
+<pre><code>GRANT USAGE ON CATALOG hive_prod TO ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN ALL DATABASES IN CATALOG hive_prod TO ROLE bi_reader;</code></pre>
+    <p>각 BI 도구에서 catalog는 보통 "스키마"의 상위처럼 보이거나 기본 SQLAlchemy URI에 명시.</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>BI 트래픽은 Observer FE를 1~2대 추가하면 읽기 분산에 효과적.</li>
+        <li>이미 만든 Async MV로 BI SQL이 자동 가속되도록 분석가가 모르는 사이에 응답이 빨라지는 패턴이 가장 좋음.</li>
+        <li>대시보드 응답 SLA 위반은 보통 (1) 통계 stale, (2) Resource Group 미분리, (3) JOIN 셔플 폭주 — 이 셋부터 점검.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../patterns/ad-analytics.html">← PAT-4</a>
+        <a href="./dbt.html">다음 → INT-2. dbt</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/integrations/" target="_blank" rel="noopener">docs.starrocks.io / Integrations</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

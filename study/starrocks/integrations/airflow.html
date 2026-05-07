@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INT-4. Airflow — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-airflow" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 외부 도구 / INT-4. Airflow</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>INT-4. Airflow 연동 패턴</h1>
+
+    <h2 id="conn">Connection 등록</h2>
+    <p>Airflow Web UI → Admin → Connections.</p>
+    <ul>
+      <li>Conn Id: <code>starrocks_default</code></li>
+      <li>Conn Type: <strong>MySQL</strong> (또는 generic)</li>
+      <li>Host/Port: <code>fe1</code> / <code>9030</code></li>
+      <li>Login/Password: SR 계정</li>
+      <li>Extra: <code>{"charset":"utf8mb4"}</code></li>
+    </ul>
+
+    <h2 id="op-mysql">MySqlOperator로 SQL 실행</h2>
+<pre><code>from airflow import DAG
+from airflow.providers.mysql.operators.mysql import MySqlOperator
+from datetime import datetime
+
+with DAG("sr_daily", start_date=datetime(2026,5,1), schedule="0 2 * * *", catchup=False) as dag:
+    rebuild = MySqlOperator(
+        task_id="rebuild_orders_d",
+        mysql_conn_id="starrocks_default",
+        sql="""
+            INSERT OVERWRITE mart.orders_d PARTITION (dt='{{ ds }}')
+            SELECT date_trunc('day', updated_at) dt, user_id, sum(amount) amt
+            FROM mart.orders WHERE updated_at::date='{{ ds }}'
+            GROUP BY 1, 2;
+        """
+    )
+    refresh_mv = MySqlOperator(
+        task_id="refresh_mv",
+        mysql_conn_id="starrocks_default",
+        sql="REFRESH MATERIALIZED VIEW mart.mv_orders_d FORCE;"
+    )
+    rebuild &gt;&gt; refresh_mv</code></pre>
+
+    <h2 id="op-stream">Stream Load Operator 패턴</h2>
+<pre><code>from airflow.providers.http.operators.http import SimpleHttpOperator
+
+stream_load = SimpleHttpOperator(
+    task_id="load_orders",
+    http_conn_id="starrocks_http",      # http://fe1:8030
+    endpoint="/api/mart/orders/_stream_load",
+    method="PUT",
+    headers={
+      "Authorization": "Basic ...",      # base64(user:pass)
+      "label": "orders_{{ ts_nodash }}",
+      "format": "CSV",
+      "column_separator": ",",
+      "columns": "order_id,user_id,status,amount,updated_at",
+    },
+    data=open("/data/orders.csv","rb").read(),
+    log_response=True,
+)</code></pre>
+
+    <h2 id="provider">StarRocks Provider</h2>
+    <p>SR 공식/커뮤니티 Airflow provider가 있는 경우 <code>apache-airflow-providers-starrocks</code>를 설치해
+    <strong>StarRocksOperator</strong> / <strong>StarRocksStreamLoadOperator</strong> 등을 사용. 없는 환경이라면 위 MySqlOperator/HttpOperator로 충분.</p>
+
+    <h2 id="dbt">Airflow + dbt</h2>
+    <p>BashOperator 또는 <code>airflow-dbt</code> / <code>cosmos</code>로 dbt run을 실행. 일반적으로 <em>Dagster + dbt</em>가 dbt 그래프 시각화에 더 강하지만, 사내 표준이 Airflow라면 그대로 사용 OK.</p>
+<pre><code>dbt_run = BashOperator(
+  task_id="dbt_run",
+  bash_command="cd /opt/dbt/proj && dbt run --target prod",
+)</code></pre>
+
+    <h2 id="sensor">SQL Sensor</h2>
+<pre><code>from airflow.providers.mysql.sensors.sql import SqlSensor
+SqlSensor(
+  task_id="wait_data",
+  conn_id="starrocks_default",
+  sql="SELECT count(*) FROM mart.orders WHERE updated_at::date='{{ ds }}'",
+  poke_interval=60, timeout=3600
+)</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>BI/ETL 분리: Airflow의 SR 사용은 <code>rg_etl</code> Resource Group으로.</li>
+        <li>Stream Load의 label은 항상 unique — Airflow의 <code>{{ ts_nodash }}</code>를 활용해 retry 안전.</li>
+        <li>큰 백필은 한 DAG run 안에서 파티션 단위로 분할(Dynamic Task Mapping) — 한 SQL로 모두 OVERWRITE는 위험.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./dagster-dbt.html">← INT-3. Dagster</a>
+        <a href="./spark-flink.html">다음 → INT-5. Spark/Flink</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/integrations/" target="_blank" rel="noopener">docs.starrocks.io / Integrations</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

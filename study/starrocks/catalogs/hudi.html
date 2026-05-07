@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-3. Hudi Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-hudi" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-3. Hudi</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-3. Hudi Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>v2.4부터 Apache Hudi 테이블을 읽을 수 있다. CoW와 MoR 모두 지원하며 메타스토어로는 HMS를 가장 흔하게 사용.</p>
+    </div>
+
+    <h2 id="basic">기본 PROPERTIES</h2>
+<pre><code>CREATE EXTERNAL CATALOG hudi_hms
+PROPERTIES (
+  "type"                  = "hudi",
+  "hive.metastore.type"   = "hive",
+  "hive.metastore.uris"   = "thrift://hms.example.com:9083",
+  -- HDFS / S3 인증은 Hive와 동일
+  "aws.s3.endpoint"       = "https://minio.internal:9000",
+  "aws.s3.access_key"     = "...",
+  "aws.s3.secret_key"     = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);</code></pre>
+
+    <h2 id="cow-mor">CoW vs MoR</h2>
+<div class="mermaid">
+graph LR
+  W["UPSERT 입력"]
+  W --> CoW["CoW: 새 base file 생성<br/>(읽기 단순, 쓰기 무거움)"]
+  W --> MoR["MoR: log file에 추가<br/>(쓰기 가벼움, 읽기 시 머지)"]
+  MoR -- compaction --> CoW2["base file 통합"]
+</div>
+<p class="diagram-caption">그림 6-3-1. Hudi 테이블 종류 — CoW와 MoR</p>
+
+    <table>
+      <thead><tr><th>구분</th><th>CoW (Copy-on-Write)</th><th>MoR (Merge-on-Read)</th></tr></thead>
+      <tbody>
+        <tr><td>쓰기 비용</td><td>큼 (파일 재작성)</td><td>작음 (로그 추가)</td></tr>
+        <tr><td>읽기 비용</td><td>작음</td><td>compaction 적체 시 ↑</td></tr>
+        <tr><td>실시간성</td><td>지연 큼</td><td>지연 작음</td></tr>
+        <tr><td>StarRocks 읽기</td><td>O</td><td>O</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="features">활용 기능</h2>
+    <ul>
+      <li>스냅샷·Incremental Query 모두 SELECT 가능 (옵션에 따라).</li>
+      <li>Schema 진화(컬럼 추가) 지원.</li>
+      <li>Hudi Time Travel — Iceberg와 유사 시맨틱.</li>
+    </ul>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>MoR 테이블의 컴팩션이 누적되면 머지 비용이 폭증 → Hudi 측 <code>hoodie.compact.inline</code> 정책 점검.</li>
+      <li>v3.x 이전 버전에서는 일부 Hudi 옵션(record-level index, secondary index)이 제한적.</li>
+      <li>StarRocks에서 Hudi <strong>쓰기는 미지원</strong>. 적재는 Spark/Flink Hudi에서 수행.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>사내에 Spark Streaming + Hudi MoR 파이프라인이 이미 있다면 그대로 StarRocks를 읽기 엔진으로 붙일 수 있음.</li>
+        <li>대시보드 노출 전, MoR 테이블의 컴팩션 주기를 짧게(예: 10분)로 운영하면 StarRocks 읽기가 일관되게 빠름.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./iceberg.html">← 6-2. Iceberg</a>
+        <a href="./delta.html">다음 → 6-4. Delta</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/hudi_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Hudi catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

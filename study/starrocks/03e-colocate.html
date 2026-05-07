@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3-4. Colocate Group — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="colocate" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 테이블 설정 심화 / 3-4. Colocate</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>3-4. Colocate Group — 셔플 없는 JOIN</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>같은 키로 자주 JOIN하는 테이블들을 같은 <strong>Colocate Group</strong>에 묶으면, BE는 같은 Tablet ID끼리만 로컬 조인해 셔플이 0이 된다.
+      가장 빠른 조인 전략.</p>
+    </div>
+
+    <h2 id="how">동작 원리</h2>
+<div class="mermaid">
+graph LR
+  A1["a Tablet 1<br/>@ BE1"]
+  A2["a Tablet 2<br/>@ BE2"]
+  B1["b Tablet 1<br/>@ BE1"]
+  B2["b Tablet 2<br/>@ BE2"]
+  A1 --- B1
+  A2 --- B2
+  R["Local Join, No Shuffle"]
+  A1 --> R
+  A2 --> R
+  B1 --> R
+  B2 --> R
+</div>
+<p class="diagram-caption">그림 3-4-1. 같은 colocate group의 같은 bucket id는 같은 BE에 위치</p>
+
+    <h2 id="rules">조건 (이게 모두 일치해야 한 그룹)</h2>
+    <ul>
+      <li>분배 키의 <strong>컬럼 수와 데이터 타입이 동일</strong></li>
+      <li>버킷 수가 동일</li>
+      <li>복제본 수가 동일</li>
+    </ul>
+
+    <h2 id="usage">사용</h2>
+<pre><code>-- 두 테이블을 같은 그룹 'g_user'에 묶음
+CREATE TABLE orders (
+  order_id BIGINT, user_id BIGINT, ...
+)
+PRIMARY KEY(order_id)
+DISTRIBUTED BY HASH(user_id) BUCKETS 32
+PROPERTIES ("colocate_with" = "g_user");
+
+CREATE TABLE user_dim (
+  user_id BIGINT, name VARCHAR(64), ...
+)
+PRIMARY KEY(user_id)
+DISTRIBUTED BY HASH(user_id) BUCKETS 32
+PROPERTIES ("colocate_with" = "g_user");</code></pre>
+
+    <h2 id="check">상태 확인</h2>
+<pre><code>SHOW PROC '/colocation_group';
+
+-- 특정 그룹 상세
+SHOW PROC '/colocation_group/&lt;group_id&gt;';</code></pre>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>colocate group의 균형이 깨지면 자동으로 재배치(rebalance)가 일어남. 잠시 쿼리 영향 가능.</li>
+      <li>BE 추가/제거 시 colocate group 수가 많으면 리밸런스 부담이 커짐.</li>
+      <li>분배 키가 다르면 같은 그룹에 못 들어감 — JOIN 키를 미리 일관되게 설계해야 함.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>차원 모델에 강력</strong>: <code>fact</code> 테이블과 <code>dim</code> 테이블의 키를 일치시키고 같은 Colocate Group에 두면 BI 응답이 즉시 빨라짐.</li>
+        <li><strong>그룹은 적게</strong>: 약 17 BE 환경에선 너무 많은 colocate group은 리밸런스 비용을 부담. 핵심 결합 3~5개 그룹 정도가 무난.</li>
+        <li><strong>새 BE 추가 시</strong>: colocate group이 많을수록 데이터 이동량이 많음 → 야간에 BE 1대씩 천천히 추가.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./03d-properties.html">← 3-3. PROPERTIES</a>
+        <a href="./04-deployment.html">다음 → 4. 배포</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/using_starrocks/Colocate_join/" target="_blank" rel="noopener">docs.starrocks.io / Colocate join</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

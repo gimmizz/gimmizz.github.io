@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>7. 쿼리 · Materialized View — StarRocks 한글 정리</title>
+  <title>7. 쿼리 · Materialized View — StarRocks 가이드</title>
   <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
@@ -120,6 +120,20 @@ FROM hive_prod.dwh.events e
 JOIN mysql_ops.app.users  u ON e.user_id = u.id
 WHERE e.dt &gt;= '2026-01-01'
 GROUP BY e.dt, e.user_id, u.grade;</code></pre>
+
+<div class="mermaid">
+graph TD
+  Q["사용자 SQL<br/>(원본)"]
+  P["FE 옵티마이저"]
+  MV["mv_event_user_d<br/>(파티션·집계 결과)"]
+  BASE["events JOIN users<br/>(베이스 테이블 조인)"]
+  Q --> P
+  P -- "MV 후보 매칭" --> MV
+  P -- "매칭 실패 시" --> BASE
+  MV --> R["결과"]
+  BASE --> R
+</div>
+<p class="diagram-caption">그림 7-1. Async MV의 Query Rewrite — 옵티마이저가 자동 치환</p>
 
     <h3 id="rewrite">Query Rewrite</h3>
     <p>옵티마이저가 SQL을 보고 MV로 자동 치환할 수 있는지 판단합니다. 활성화/확인.</p>

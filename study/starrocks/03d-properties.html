@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3-3. PROPERTIES 레퍼런스 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="properties" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 테이블 설정 심화 / 3-3. PROPERTIES</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>3-3. CREATE TABLE PROPERTIES 레퍼런스</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>테이블 동작·저장·인덱스·MV 모두 PROPERTIES로 제어한다. 자주 쓰는 20여 개를 카테고리별로 정리.</p>
+    </div>
+
+    <h2 id="storage">스토리지 / 복제</h2>
+    <table>
+      <thead><tr><th>키</th><th>값</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><code>replication_num</code></td><td>3 (기본)</td><td>Tablet 복제본 수. 약 17 BE면 3 권장.</td></tr>
+        <tr><td><code>storage_medium</code></td><td>SSD / HDD</td><td>핫 데이터 매체. SSD가 일반.</td></tr>
+        <tr><td><code>storage_cooldown_time</code></td><td>"2026-08-01 00:00:00"</td><td>이 시점 이후 콜드 매체로 이동.</td></tr>
+        <tr><td><code>storage_volume</code></td><td>볼륨 이름</td><td>Shared-data 모드에서 객체 스토리지 볼륨 지정.</td></tr>
+        <tr><td><code>compression</code></td><td>LZ4 (기본) / ZSTD / SNAPPY / ZLIB</td><td>컬럼 압축 코덱. ZSTD가 압축률 우수.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="partition">파티션 / 버킷</h2>
+    <table>
+      <thead><tr><th>키</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><code>dynamic_partition.enable</code></td><td>true/false</td></tr>
+        <tr><td><code>dynamic_partition.time_unit</code></td><td>HOUR/DAY/MONTH</td></tr>
+        <tr><td><code>dynamic_partition.start</code> / <code>.end</code></td><td>보존/미래 파티션 범위</td></tr>
+        <tr><td><code>dynamic_partition.prefix</code></td><td>파티션 이름 접두어 (보통 "p")</td></tr>
+        <tr><td><code>dynamic_partition.buckets</code></td><td>새 파티션의 버킷 수</td></tr>
+        <tr><td><code>colocate_with</code></td><td>Colocate Group 이름. 같은 그룹 테이블 간 셔플 없는 JOIN.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="index">인덱스</h2>
+    <table>
+      <thead><tr><th>키</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><code>bloom_filter_columns</code></td><td>"col1, col2" — 등호 lookup 가속</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="pk">Primary Key 전용</h2>
+    <table>
+      <thead><tr><th>키</th><th>값</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_persistent_index</code></td><td>true</td><td>PK 인덱스 일부를 디스크로. 대용량 PK 필수.</td></tr>
+        <tr><td><code>persistent_index_type</code></td><td>LOCAL / CLOUD_NATIVE</td><td>v3.x — 영속 인덱스 종류.</td></tr>
+        <tr><td><code>write_quorum</code></td><td>MAJORITY (기본) / ALL / ONE</td><td>Tablet 쓰기 quorum 정책.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="mv">Materialized View</h2>
+    <table>
+      <thead><tr><th>키</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_query_rewrite</code></td><td>MV 자동 재작성 허용 여부</td></tr>
+        <tr><td><code>partition_refresh_number</code></td><td>한 번에 리프레시할 파티션 수</td></tr>
+        <tr><td><code>excluded_trigger_tables</code></td><td>이 테이블 변경은 MV 트리거 X</td></tr>
+        <tr><td><code>session.query_timeout</code></td><td>리프레시 잡의 타임아웃</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="example">종합 예시</h2>
+<pre><code>CREATE TABLE mart.orders (
+  order_id   BIGINT NOT NULL,
+  user_id    BIGINT NOT NULL,
+  status     VARCHAR(32),
+  amount     DECIMAL(18,2),
+  updated_at DATETIME
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('day', updated_at)
+DISTRIBUTED BY HASH(order_id)
+ORDER BY(updated_at)
+PROPERTIES (
+  "replication_num"          = "3",
+  "storage_medium"           = "SSD",
+  "compression"              = "ZSTD",
+  "enable_persistent_index"  = "true",
+  "bloom_filter_columns"     = "user_id",
+  "dynamic_partition.enable" = "true",
+  "dynamic_partition.time_unit" = "DAY",
+  "dynamic_partition.start"  = "-90",
+  "dynamic_partition.end"    = "3",
+  "dynamic_partition.prefix" = "p"
+);</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>표준 PROPERTIES 템플릿</strong>을 사내 위키로 정리해 놓고, 모든 신규 테이블이 같은 기본값을 갖게 하면 운영 부담이 크게 줄어듭니다.</li>
+        <li><strong>compression=ZSTD</strong>: SSD가 충분하니 압축률보다 디코딩 비용이 살짝 더 들어도 OK인 워크로드에서 좋음. 핫 테이블은 LZ4가 안전.</li>
+        <li><strong>storage_cooldown_time</strong>: 향후 SSD가 부족해지면 콜드 매체(별도 HDD/오브젝트 스토리지)로 자동 이동시키는 정책을 미리 설계해두는 게 좋음.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./03c-indexes.html">← 3-2. 인덱스</a>
+        <a href="./03e-colocate.html">다음 → 3-4. Colocate</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-statements/data-definition/CREATE_TABLE/" target="_blank" rel="noopener">docs.starrocks.io / CREATE TABLE</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

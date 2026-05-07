@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>5-1. 트러블슈팅 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="troubleshooting" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 5-1. 트러블슈팅</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>5-1. 트러블슈팅 — 자주 만나는 증상과 해법</h1>
+
+    <h2 id="be-down">BE가 자꾸 죽는다</h2>
+    <ul>
+      <li><strong>OOM 가능성</strong>: <code>be.WARNING</code> / dmesg 확인. <code>mem_limit</code>를 80% → 70%로 내리고 큰 쿼리는 <code>query_mem_limit</code>로 분리.</li>
+      <li><strong>디스크 가득</strong>: <code>SHOW BACKENDS</code>의 <code>MaxDiskUsedPct</code>. 90%를 넘으면 BE가 self-protect로 종료될 수 있음. 파티션 정리/추가 디스크.</li>
+      <li><strong>네트워크</strong>: BE↔BE 9060 포트 유실 → heartbeat fail. 방화벽 변경 직후라면 의심.</li>
+    </ul>
+
+    <h2 id="slow-query">쿼리가 갑자기 느려진다</h2>
+    <ul>
+      <li><strong>통계 누락/오래됨</strong>: <code>ANALYZE TABLE ...;</code></li>
+      <li><strong>컴팩션 적체</strong>: <code>SHOW PROC '/statistic';</code> compaction score &gt; 100이면 적체.</li>
+      <li><strong>MV가 무효화됨</strong>: <code>SHOW MATERIALIZED VIEW ...;</code> 활성 상태와 마지막 리프레시 시간 확인.</li>
+      <li><strong>Tablet 복구 중</strong>: BE 한 대 재기동 직후라면 정상. <code>SHOW PROC '/statistic';</code>의 unhealthy/clone 큐 확인.</li>
+    </ul>
+
+    <h2 id="meta">메타스토어 변경이 안 보인다 (외부 카탈로그)</h2>
+<pre><code>REFRESH EXTERNAL TABLE hive_prod.dwh.events;
+REFRESH CATALOG hive_prod;</code></pre>
+    <p>또는 캐시 TTL을 줄이고 백그라운드 자동 갱신을 켭니다(<a href="./catalogs/hive.html#cache">Hive Cache</a>).</p>
+
+    <h2 id="hms-conn">HMS 연결 실패</h2>
+    <ul>
+      <li>모든 FE/BE에서 <code>thrift://hms:9083</code> 도달 가능한가?</li>
+      <li>Kerberos인 경우 keytab 만료/principal 일치 여부.</li>
+      <li>HMS HA URL 다수 등록 시 한 노드라도 비정상이면 첫 시도 지연 — 정상 노드를 앞쪽에 배치.</li>
+    </ul>
+
+    <h2 id="connect">"Too many connections"</h2>
+<pre><code>-- 글로벌 동시 연결 한도
+ADMIN SHOW FRONTEND CONFIG LIKE 'qe_max_connection';
+ADMIN SET FRONTEND CONFIG ("qe_max_connection" = "4096");</code></pre>
+    <p>BI 도구의 connection pool 누수도 흔한 원인. <code>SHOW PROCESSLIST</code>에서 idle이 비정상으로 많은지 확인.</p>
+
+    <h2 id="kill">잘못 돌고 있는 쿼리 죽이기</h2>
+<pre><code>SHOW PROCESSLIST;
+KILL QUERY &lt;id&gt;;
+KILL CONNECTION &lt;id&gt;;</code></pre>
+
+    <h2 id="fe-meta">FE 메타데이터 손상</h2>
+    <p>최악의 시나리오. 절차:</p>
+    <ol>
+      <li>모든 FE 정지.</li>
+      <li>이전 백업한 <code>fe/meta</code>를 같은 위치에 복원.</li>
+      <li>Leader가 될 FE 하나를 먼저 기동, 다른 FE는 <code>--helper</code>로 합류.</li>
+      <li><code>SHOW FRONTENDS</code> alive 확인.</li>
+    </ol>
+
+    <h2 id="load-fail">적재(Stream/Routine Load) 실패</h2>
+    <ul>
+      <li>"label already exists": label 충돌. 시간/시퀀스를 label에 포함.</li>
+      <li>"too many filtered rows": 데이터 포맷 문제. <code>SHOW LOAD WHERE LABEL='...'</code>의 <code>ErrorURL</code>에서 실패 행 확인.</li>
+      <li>Routine Load의 PAUSED: <code>SHOW ROUTINE LOAD;</code> 후 <code>RESUME ROUTINE LOAD ...;</code></li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>로그 일원화 필수</strong>: 약 20대 PM의 <code>fe/log</code>·<code>be/log</code>를 ELK/Loki에 모으면 트러블슈팅 시간이 절반으로.</li>
+        <li><strong>증상→체크리스트</strong>를 위키로 두고, 알람도 같은 분류로 보내면 신규 운영자가 빨리 적응.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./05-administration.html">← 5. 운영</a>
+        <a href="./09-monitoring.html">다음 → 5-2. 모니터링</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/faq/" target="_blank" rel="noopener">docs.starrocks.io / FAQ</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

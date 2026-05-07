@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>2. 아키텍처 — StarRocks 한글 정리</title>
+  <title>2. 아키텍처 — StarRocks 가이드</title>
   <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
@@ -30,24 +30,29 @@
       StarRocks 클러스터는 두 종류의 노드만으로 구성됩니다.
     </p>
 
-<pre><code>             ┌──────────────────────────────┐
-   클라이언트  │ MySQL CLI · JDBC · BI 도구    │
-             └──────────────┬───────────────┘
-                            │ MySQL 프로토콜 (port 9030)
-                  ┌─────────┴─────────┐
-                  │       FE (3대)    │  ← 메타데이터, 옵티마이저
-                  │  Leader/Follower/ │  ← Raft(BDB JE) 동기화
-                  │       Observer    │
-                  └─────────┬─────────┘
-                            │ Thrift (port 9020) 등
-        ┌───────────┬───────┴────────┬────────────┐
-        │           │                │            │
-   ┌────▼──┐   ┌────▼──┐        ┌────▼──┐    ┌────▼──┐
-   │ BE 1  │   │ BE 2  │   …    │ BE N  │    │ ...   │   ← 데이터 저장 + 쿼리 실행
-   │ Local │   │ Local │        │ Local │    │       │
-   │ SSDx8 │   │ SSDx8 │        │ SSDx8 │    │       │
-   └───────┘   └───────┘        └───────┘    └───────┘
-</code></pre>
+<div class="mermaid">
+graph TD
+  CLI["클라이언트<br/>(MySQL CLI · JDBC · BI)"]
+  subgraph FE["FE (3대) — 메타데이터 + 옵티마이저"]
+    LDR["Leader<br/>읽기·쓰기"]
+    FLW1["Follower"]
+    FLW2["Follower"]
+  end
+  subgraph BE["BE (N대) — 데이터 + 실행"]
+    BE1["BE 1<br/>SSD x8"]
+    BE2["BE 2<br/>SSD x8"]
+    BE3["BE N<br/>SSD x8"]
+  end
+  CLI -- "MySQL Proto :9030" --> LDR
+  LDR <-- "Raft (BDB JE)" --> FLW1
+  LDR <-- "Raft (BDB JE)" --> FLW2
+  LDR -- "Thrift :9020" --> BE1
+  LDR -- "Thrift :9020" --> BE2
+  LDR -- "Thrift :9020" --> BE3
+  BE1 <-- "Exchange :9060" --> BE2
+  BE2 <-- "Exchange :9060" --> BE3
+</div>
+<p class="diagram-caption">그림 2-1. StarRocks 기본 토폴로지 — FE 3대 + BE N대</p>
 
     <p>
       외부 의존성이 거의 없습니다. ZooKeeper도, etcd도, 별도 메타스토어도 필요 없습니다 — FE에 BDB JE가 내장되어 있기 때문입니다.
@@ -116,10 +121,19 @@ storage_root_path = /data/sr/disk1;/data/sr/disk2;/data/sr/disk3;/data/sr/disk4;
     <p>
       StarRocks 테이블은 다음과 같이 분할됩니다.
     </p>
-<pre><code>테이블
- └─ 파티션 (예: 일자별)
-     └─ 버킷 = Tablet (해시 분배)
-         └─ 복제본 N개 (보통 3)</code></pre>
+<div class="mermaid">
+graph TD
+  T["Table: orders"]
+  T --> P1["Partition dt=2026-05-06"]
+  T --> P2["Partition dt=2026-05-07"]
+  P2 --> B1["Bucket 0 (Tablet)"]
+  P2 --> B2["Bucket 1 (Tablet)"]
+  P2 --> B3["Bucket 2 (Tablet)"]
+  B2 --> R1["Replica @ BE1"]
+  B2 --> R2["Replica @ BE5"]
+  B2 --> R3["Replica @ BE9"]
+</div>
+<p class="diagram-caption">그림 2-3. 테이블 → 파티션 → 버킷(Tablet) → 복제본 3</p>
     <p>
       복제본은 서로 다른 BE에 배치되어 단일 BE 장애에서도 쿼리가 가능합니다.
       클러스터 리밸런스, 복구, 마이그레이션 모두 Tablet 단위로 일어납니다.
@@ -167,6 +181,24 @@ storage_root_path = /data/sr/disk1;/data/sr/disk2;/data/sr/disk3;/data/sr/disk4;
     </ul>
 
     <h2 id="query-flow">2.6 쿼리 처리 흐름</h2>
+<div class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant F as FE (Coordinator)
+  participant B1 as BE #1
+  participant B2 as BE #2
+  participant B3 as BE #3
+  C->>F: SQL (MySQL Proto)
+  F->>F: Parse → CBO → Physical Plan (Fragments)
+  F->>B1: Fragment A
+  F->>B2: Fragment A
+  F->>B3: Fragment A
+  B1-->>B2: Exchange (Hash Shuffle)
+  B3-->>B2: Exchange (Hash Shuffle)
+  B2->>F: Result
+  F->>C: Rows
+</div>
+<p class="diagram-caption">그림 2-2. 단일 쿼리의 Fragment 분배·실행 흐름</p>
     <ol>
       <li>클라이언트가 MySQL 프로토콜로 <strong>FE</strong>에 접속.</li>
       <li>FE 파서가 SQL → AST → 논리 플랜 생성.</li>

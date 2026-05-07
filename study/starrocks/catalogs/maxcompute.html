@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-10. MaxCompute Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-maxcompute" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-10. MaxCompute</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-10. MaxCompute Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>Alibaba Cloud MaxCompute(ODPS)의 테이블에 직접 SELECT 가능. 알리바바 클라우드 환경에서 주로 쓰임.</p>
+    </div>
+
+    <h2 id="basic">PROPERTIES</h2>
+<pre><code>CREATE EXTERNAL CATALOG mc_prod
+PROPERTIES (
+  "type"                  = "maxcompute",
+  "aliyun.odps.endpoint"  = "http://service.cn-hangzhou.maxcompute.aliyun.com/api",
+  "aliyun.odps.project"   = "your_project",
+  "aliyun.odps.access.id" = "...",
+  "aliyun.odps.access.key" = "...",
+  "aliyun.odps.tunnel.endpoint" = "http://dt.cn-hangzhou.maxcompute.aliyun.com"
+);</code></pre>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>알리바바 클라우드 외부에서 사용 시 네트워크 비용/지연이 큼.</li>
+      <li>StarRocks에서 MaxCompute 쓰기는 미지원.</li>
+      <li>대용량 풀스캔은 MaxCompute의 슬롯 비용을 폭증시킬 수 있음.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>국내 자체 데이터센터 환경에서는 잘 쓰이지 않음. 알리바바 클라우드 의존이 있는 일부 데이터를 결합 분석할 때만 검토.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./kudu.html">← 6-9. Kudu</a>
+        <a href="../06-query-mv.html">다음 → 7. 쿼리 / MV</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/maxcompute_catalog/" target="_blank" rel="noopener">docs.starrocks.io / MaxCompute catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

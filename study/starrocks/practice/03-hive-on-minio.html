@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P-3. Hive + MinIO 실습 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="practice-hive" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 실습 / P-3. Hive on MinIO</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>P-3. Hive Catalog + MinIO 로컬 실습</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 목표</div>
+      <p>로컬에 MinIO + HMS + StarRocks를 띄우고 Hive Catalog로 외부 테이블을 SELECT 한다. 운영 PM 클러스터에서 그대로 옮겨갈 수 있는 패턴.</p>
+    </div>
+
+    <h2>구성</h2>
+<div class="mermaid">
+graph LR
+  SR["StarRocks Allin1<br/>:9030 :8030"]
+  HMS["HMS Standalone<br/>:9083"]
+  PG["Postgres (HMS DB)"]
+  M["MinIO<br/>:9000 (S3 API)"]
+  SR -->|메타| HMS
+  HMS -->|jdbc| PG
+  SR -->|S3 API| M
+</div>
+
+    <div class="steps-container">
+      <div class="step">
+        <strong>네트워크 + MinIO 시작</strong>
+<pre><code>docker network create srnet
+
+docker run -d --name minio --network srnet \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio123 \
+  minio/minio server /data --console-address ":9001"
+
+# 버킷 생성 (mc 또는 콘솔 http://localhost:9001)
+docker run --rm --network srnet --entrypoint sh minio/mc -c \
+  "mc alias set m http://minio:9000 minio minio123 && mc mb m/warehouse"</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>HMS 시작 (Postgres + Hive Metastore)</strong>
+<pre><code>docker run -d --name hms-pg --network srnet \
+  -e POSTGRES_USER=hive -e POSTGRES_PASSWORD=hive -e POSTGRES_DB=metastore \
+  postgres:14
+
+docker run -d --name hms --network srnet -p 9083:9083 \
+  -e DATABASE_HOST=hms-pg -e DATABASE_DB=metastore \
+  -e DATABASE_USER=hive -e DATABASE_PASSWORD=hive \
+  -e S3_ENDPOINT=http://minio:9000 \
+  -e S3_ACCESS_KEY=minio -e S3_SECRET_KEY=minio123 \
+  -e S3_PATH_STYLE_ACCESS=true \
+  apache/hive:3.1.3 /opt/hive/bin/hive --service metastore</code></pre>
+        <p>(이미지/환경 변수는 실제 도구에 맞게 조정. 사내에서는 hive-site.xml를 직접 마운트하는 경우가 많음.)</p>
+      </div>
+
+      <div class="step">
+        <strong>StarRocks Allin1 시작</strong>
+<pre><code>docker run -d --name sr --network srnet \
+  -p 9030:9030 -p 8030:8030 -p 8040:8040 \
+  starrocks/allin1-ubuntu:latest</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>StarRocks에서 Hive Catalog 생성</strong>
+<pre><code>mysql -h 127.0.0.1 -P 9030 -u root
+
+CREATE EXTERNAL CATALOG hive_local
+PROPERTIES (
+  "type" = "hive",
+  "hive.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms:9083",
+  "aws.s3.endpoint"     = "http://minio:9000",
+  "aws.s3.access_key"   = "minio",
+  "aws.s3.secret_key"   = "minio123",
+  "aws.s3.enable_path_style_access" = "true"
+);</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>Hive 테이블 생성 + 데이터 INSERT (StarRocks에서!)</strong>
+<pre><code>SET CATALOG hive_local;
+CREATE DATABASE dwh;
+
+CREATE TABLE dwh.events (
+  event_time DATETIME,
+  user_id    BIGINT,
+  event_type VARCHAR(32),
+  dt         DATE
+)
+PARTITION BY (dt)
+PROPERTIES (
+  "location"     = "s3://warehouse/dwh.db/events/",
+  "file_format"  = "parquet"
+);
+
+INSERT INTO dwh.events VALUES
+  ('2026-05-07 10:00:00', 100, 'view',  '2026-05-07'),
+  ('2026-05-07 10:05:00', 100, 'click', '2026-05-07'),
+  ('2026-05-07 10:10:00', 200, 'view',  '2026-05-07');
+
+SELECT count(*) FROM dwh.events WHERE dt = '2026-05-07';</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>외부 카탈로그와 내부 테이블 JOIN</strong>
+<pre><code>SET CATALOG default_catalog;
+USE shop;  -- P-2에서 만든 테이블
+
+SELECT u.user_id, count(*) cnt
+FROM hive_local.dwh.events e
+LEFT JOIN shop.orders o ON e.user_id = o.user_id
+GROUP BY u.user_id;</code></pre>
+      </div>
+    </div>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>이 실습 그대로 사내 PM 환경에 옮길 때는 (1) MinIO → 사내 S3/HDFS, (2) HMS → 사내 HMS, (3) StarRocks Allin1 → 약 20대 PM 분산 클러스터로만 바꾸면 됩니다. 카탈로그 등록 SQL은 동일.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./02-first-table-and-load.html">← P-2. 첫 테이블</a>
+        <a href="./04-async-mv.html">다음 → P-4. Async MV</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/hive_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Hive Catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

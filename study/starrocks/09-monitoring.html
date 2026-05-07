@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>5-2. 모니터링 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="monitoring" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 5-2. 모니터링</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>5-2. 모니터링 — Prometheus + Grafana</h1>
+
+    <h2 id="endpoints">메트릭 엔드포인트</h2>
+<pre><code>FE: http://&lt;fe&gt;:8030/metrics
+BE: http://&lt;be&gt;:8040/metrics
+CN: http://&lt;cn&gt;:8040/metrics</code></pre>
+
+    <h2 id="prom">Prometheus scrape 예시</h2>
+<pre><code>scrape_configs:
+  - job_name: 'starrocks-fe'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['fe1:8030', 'fe2:8030', 'fe3:8030']
+  - job_name: 'starrocks-be'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['be01:8040','be02:8040','be03:8040', ...]</code></pre>
+
+    <h2 id="key-metrics">핵심 메트릭 30개</h2>
+
+    <h3>FE 측</h3>
+    <table>
+      <thead><tr><th>메트릭</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>jvm_heap_size_bytes</code></td><td>FE JVM Heap. 80% 넘어가면 OOM 위험</td></tr>
+        <tr><td><code>connection_total</code></td><td>현재 연결 수</td></tr>
+        <tr><td><code>qps</code></td><td>초당 쿼리 수</td></tr>
+        <tr><td><code>query_err_rate</code></td><td>쿼리 실패율</td></tr>
+        <tr><td><code>query_latency_ms{quantile="0.99"}</code></td><td>p99 쿼리 지연</td></tr>
+        <tr><td><code>image_write</code> / <code>edit_log</code></td><td>메타 변경 처리량</td></tr>
+        <tr><td><code>routine_load_jobs</code></td><td>Routine Load 잡 수/상태</td></tr>
+      </tbody>
+    </table>
+
+    <h3>BE 측</h3>
+    <table>
+      <thead><tr><th>메트릭</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>be_memory_pool_bytes</code></td><td>BE 메모리 풀별 사용량</td></tr>
+        <tr><td><code>be_storage_page_cache_bytes</code></td><td>페이지 캐시</td></tr>
+        <tr><td><code>be_disks_data_used_capacity</code></td><td>디스크별 사용량 (디스크 8개에 대해)</td></tr>
+        <tr><td><code>be_compaction_score{level="max"}</code></td><td>컴팩션 적체 — &gt;100 위험</td></tr>
+        <tr><td><code>be_query_scan_rows</code></td><td>스캔 row 처리량</td></tr>
+        <tr><td><code>be_engine_requests_total</code></td><td>BE Engine 요청 수</td></tr>
+        <tr><td><code>be_brpc_endpoint_active_streams</code></td><td>brpc 활성 stream — 셔플 부하 지표</td></tr>
+        <tr><td><code>be_tablet_local_count</code></td><td>BE가 들고 있는 Tablet 수</td></tr>
+        <tr><td><code>be_unhealthy_tablet_count</code></td><td>비정상 Tablet — 0이어야 함</td></tr>
+        <tr><td><code>be_clone_in_progress</code></td><td>복제 중 Tablet 수</td></tr>
+        <tr><td><code>be_routine_load_rows</code></td><td>Routine Load 처리 행</td></tr>
+        <tr><td><code>be_load_channel_count</code></td><td>활성 적재 채널</td></tr>
+        <tr><td><code>be_data_cache_hit_ratio</code></td><td>외부 카탈로그 Data Cache 적중률</td></tr>
+        <tr><td><code>be_pk_index_memory_bytes</code></td><td>PK 인덱스 메모리</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="alarms">알람 권장 임계값</h2>
+    <table>
+      <thead><tr><th>지표</th><th>경고</th><th>위험</th></tr></thead>
+      <tbody>
+        <tr><td>FE JVM Heap</td><td>&gt;75%</td><td>&gt;90%</td></tr>
+        <tr><td>BE 메모리 사용</td><td>&gt;75% of mem_limit</td><td>&gt;90%</td></tr>
+        <tr><td>디스크 사용</td><td>&gt;80%</td><td>&gt;90%</td></tr>
+        <tr><td>compaction_score</td><td>&gt;50</td><td>&gt;100</td></tr>
+        <tr><td>unhealthy tablet</td><td>&gt;0 (5분 지속)</td><td>&gt;100</td></tr>
+        <tr><td>BE alive 수</td><td>&lt; N (N=BE 수)</td><td>&lt; N-1</td></tr>
+        <tr><td>FE alive 수</td><td>&lt; 3</td><td>&lt; 2 (quorum loss)</td></tr>
+        <tr><td>p99 query latency</td><td>5s 초과</td><td>30s 초과</td></tr>
+        <tr><td>Routine Load PAUSED</td><td>임의 1건</td><td>—</td></tr>
+        <tr><td>Data Cache hit ratio</td><td>&lt; 30%</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="dashboard">Grafana 대시보드</h2>
+    <p>StarRocks 공식 GitHub의 <code>contrib/grafana-dashboards</code> 또는 커뮤니티 대시보드(grafana.com/dashboards)에서 시작.</p>
+    <p>대시보드 그룹은 다음으로 분리하면 한눈에 보기 좋음:</p>
+    <ul>
+      <li><strong>Overview</strong>: 클러스터 alive, QPS, p99 latency.</li>
+      <li><strong>FE</strong>: JVM, edit log, connection.</li>
+      <li><strong>BE</strong>: 메모리/디스크/compaction/tablet.</li>
+      <li><strong>Loading</strong>: Stream/Routine/Broker Load 진행/실패.</li>
+      <li><strong>External Catalog</strong>: HMS 호출, Data Cache hit.</li>
+    </ul>
+
+    <h2 id="audit">Audit Log를 분석에 활용</h2>
+<pre><code>-- audit_loader 플러그인 적재 후
+SELECT user, count(*) AS cnt, avg(query_time)/1000 AS avg_sec
+FROM starrocks_audit_db__.starrocks_audit_tbl__
+WHERE event_time &gt;= NOW() - INTERVAL 1 HOUR
+GROUP BY user ORDER BY cnt DESC LIMIT 20;</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>알람을 너무 민감하게 잡지 말 것</strong>: 약 20대 환경에서 BE 1대 재기동 = 잠시 unhealthy tablet 증가. 5분 지속 조건을 두는 게 좋음.</li>
+        <li><strong>디스크별 모니터링 필수</strong>: SSD 8개 중 1개만 가득 차도 BE가 self-protect로 멈출 수 있음.</li>
+        <li><strong>Audit log를 자체 분석</strong>: 사용자별 사용량 + 쿼리 타입 분포가 보이면 Resource Group 설계가 자연스럽게 정해짐.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./08-troubleshooting.html">← 5-1. 트러블슈팅</a>
+        <a href="./10-shared-data.html">다음 → 5-3. Shared-Data</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/monitoring/Monitor_and_Alert/" target="_blank" rel="noopener">docs.starrocks.io / Monitor and alert</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

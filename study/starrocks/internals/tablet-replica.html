@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYS-4. Tablet 복제·복구 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-tablet" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 시스템 내부 / SYS-4. Tablet 복제</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SYS-4. Tablet 복제·복구</h1>
+
+    <h2 id="placement">배치 원칙</h2>
+    <ul>
+      <li>한 Tablet의 N개 복제본은 <strong>서로 다른 BE</strong>에 위치.</li>
+      <li>Rack/Zone 인지가 가능하면 다른 rack에 분산 — 더 강한 내고장성.</li>
+      <li>BE의 디스크들 사이에서 라운드로빈으로 균형.</li>
+    </ul>
+
+    <h2 id="states">Replica 상태</h2>
+    <table>
+      <thead><tr><th>상태</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td>HEALTHY</td><td>정상</td></tr>
+        <tr><td>VERSION_MISSING</td><td>일부 버전 누락 — clone으로 복구</td></tr>
+        <tr><td>REPLICA_MISSING</td><td>복제본 수 부족 — 신규 BE에서 clone</td></tr>
+        <tr><td>UNHEALTHY</td><td>BE 다운/네트워크 단절</td></tr>
+        <tr><td>FORCE_REDUNDANT</td><td>복제본 과잉 — 정리 대상</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="clone">자동 복구 (Clone)</h2>
+<div class="mermaid">
+graph LR
+  BE1["BE1 down"]
+  T["Replica missing 감지"]
+  S["FE Scheduler"]
+  C["Clone Task"]
+  N["새 BE에서 받은 복제본"]
+  BE1 --> T --> S --> C --> N</div>
+
+<pre><code>-- 진행 중인 clone/복구 큐
+SELECT type, count(*)
+FROM information_schema.tablet_schedules
+WHERE state IN ('PENDING','RUNNING')
+GROUP BY type;
+
+-- 자세히
+SHOW PROC '/cluster_balance';</code></pre>
+
+    <h2 id="config">관련 FE 파라미터</h2>
+<pre><code># fe.conf
+tablet_repair_delay_factor_second = 60      # 즉시 복구 시작까지 대기
+tablet_sched_max_scheduling_tablets = 10000
+clone_thread_num = 16
+schedule_slot_num_per_path = 2</code></pre>
+
+    <h2 id="manual">수동 조정</h2>
+<pre><code>-- 특정 Tablet 보고
+SHOW TABLET 12345\G
+
+-- 특정 BE의 모든 Tablet 이전 (DECOMMISSION)
+ALTER SYSTEM DECOMMISSION BACKEND "be05:9050";
+
+-- 잘못된 복제본 일치 강제
+ADMIN SET REPLICA STATUS PROPERTIES (
+  "tablet_id" = "12345",
+  "backend_id" = "10003",
+  "status" = "bad"
+);
+-- bad로 두면 다음 스케줄러 라운드에서 새 복제 생성</code></pre>
+
+    <h2 id="rebalance">리밸런스</h2>
+    <p>BE 추가 시 자동으로 일부 Tablet이 새 BE로 이전된다. 부하가 큰 시점에는 잠시 쿼리 영향이 있을 수 있어 야간 작업 권장.</p>
+<pre><code>-- 리밸런스 정지 / 재개
+ADMIN SET FRONTEND CONFIG ("disable_balance" = "true");
+ADMIN SET FRONTEND CONFIG ("disable_balance" = "false");</code></pre>
+
+    <h2 id="colocate-bal">Colocate Group 리밸런스</h2>
+    <p>Colocate group은 정합이 깨지면 그룹 단위로 리밸런스 수행. 그룹이 많을수록 BE 추가/제거 비용이 커짐.</p>
+<pre><code>SHOW PROC '/colocation_group';
+-- 그룹별 stable / unstable 상태 확인</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>BE 1대 재기동은 약 17 BE 환경에서 흔한 작업. 재기동 직후 잠시 unhealthy/clone 큐가 쌓이는 건 정상 — 알람은 5~10분 지속 조건.</li>
+        <li>Decommission은 <strong>반드시</strong> 끝까지 기다린 후 DROP. 중간에 끊으면 복제본 손실 위험.</li>
+        <li>대량 BE 추가 시 <code>disable_balance</code>를 잠시 켜고 ADD BACKEND를 모두 끝낸 후 한꺼번에 끄는 패턴이 안정적.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./memtracker.html">← SYS-3</a>
+        <a href="../07-tuning.html">다음 → 8. 튜닝</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/" target="_blank" rel="noopener">docs.starrocks.io / Administration</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

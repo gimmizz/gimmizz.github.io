@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>6-1. Hive Catalog — StarRocks 한글 정리</title>
+  <title>6-1. Hive Catalog — StarRocks 가이드</title>
   <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
@@ -23,6 +23,29 @@
       <p>HMS(또는 Glue) + HDFS(또는 S3)만 지정하면 Hive 테이블을 StarRocks에서 그대로 읽고/쓸 수 있다.
       v3.2부터는 <code>CREATE TABLE</code>·<code>INSERT</code>까지 지원되어 단순 ETL 도구로도 활용 가능.</p>
     </div>
+
+<div class="mermaid">
+graph LR
+  USER["사용자 SQL<br/>SELECT ... FROM hive_prod.dwh.events"]
+  FE["FE<br/>(메타 캐시)"]
+  HMS["HMS<br/>thrift :9083"]
+  BE1["BE 1"]
+  BE2["BE 2"]
+  BE3["BE 3"]
+  HDFS["HDFS / S3<br/>parquet · orc · text"]
+  CACHE["BE Local<br/>Data Cache"]
+  USER --> FE
+  FE -- "메타 조회" --> HMS
+  FE -- "Fragment 분배" --> BE1
+  FE -- "Fragment 분배" --> BE2
+  FE -- "Fragment 분배" --> BE3
+  BE1 --> HDFS
+  BE2 --> HDFS
+  BE3 --> HDFS
+  BE1 -.캐시 적중.-> CACHE
+  BE2 -.캐시 적중.-> CACHE
+</div>
+<p class="diagram-caption">그림 6-1-1. Hive Catalog 데이터 흐름 — FE는 메타, BE는 직접 파일 스캔</p>
 
     <h2 id="basic">6-1.1 가장 단순한 예 (HMS + HDFS, Simple 인증)</h2>
 <pre><code>CREATE EXTERNAL CATALOG hive_prod

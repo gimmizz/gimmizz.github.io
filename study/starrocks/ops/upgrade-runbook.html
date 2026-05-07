@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPS-3. 업그레이드 절차서 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-upgrade" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / OPS-3. 업그레이드</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>OPS-3. 업그레이드 절차서 (Runbook)</h1>
+
+    <h2 id="prep">사전 준비</h2>
+    <ol>
+      <li>릴리스 노트 정독 — 호환성 변경, 메타 마이그레이션 여부.</li>
+      <li>현재 버전·새 버전 확인: <code>SELECT version();</code></li>
+      <li>FE 메타 디렉터리 백업: <code>tar czf fe-meta-$(date +%F).tgz fe/meta</code></li>
+      <li>BACKUP SNAPSHOT으로 핵심 마트 백업 (<a href="./backup-runbook.html">OPS-4</a>).</li>
+      <li>새 버전 바이너리를 모든 PM에 미리 배포 (Ansible).</li>
+      <li>알람 일시 무음(maintenance window) — 단, 절대 끄지 말 것.</li>
+    </ol>
+
+    <h2 id="order">순서 — Observer → Follower → Leader → BE</h2>
+<div class="mermaid">
+graph LR
+  O["Observer (있으면)"] --> F["Follower"] --> L["Leader"] --> B["BE 1대씩"]</div>
+
+    <h2 id="fe">FE 업그레이드 (1대씩)</h2>
+    <ol>
+      <li>대상 FE에서 <code>stop_fe.sh</code></li>
+      <li>새 버전 디렉터리로 심볼릭 링크 변경 (또는 새 위치로 unpack)</li>
+      <li><code>start_fe.sh --daemon</code></li>
+      <li><code>SHOW FRONTENDS</code>에서 <code>alive=true</code> + <code>version</code>이 새 버전인지 확인</li>
+      <li>다음 FE로 진행. <strong>Leader는 가장 마지막</strong></li>
+    </ol>
+<pre><code>-- 진행 중 상시 모니터링
+SHOW FRONTENDS;
+SHOW BACKENDS;
+SELECT count(*) FROM information_schema.tablet_schedules WHERE state IN ('RUNNING','PENDING');</code></pre>
+
+    <h2 id="be">BE 업그레이드 (1~2대씩)</h2>
+    <ol>
+      <li>대상 BE의 Tablet 복제(보통 3) 중 하나가 잠시 빠지므로, 한 번에 <strong>1~2대만</strong>.</li>
+      <li><code>stop_be.sh</code></li>
+      <li>새 버전 위치로 교체</li>
+      <li><code>start_be.sh --daemon</code></li>
+      <li><code>SHOW BACKENDS</code>에서 alive·version 확인 + clone queue 비워질 때까지 대기</li>
+      <li>다음 BE로</li>
+    </ol>
+
+    <h2 id="ansible">Ansible 자동화 예</h2>
+<pre><code># roles/upgrade_be/tasks/main.yml
+- name: stop be
+  systemd: name=starrocks-be state=stopped
+
+- name: switch symlink to new version
+  file: src=/opt/StarRocks-{{ new_version }}/be path=/opt/sr/be state=link force=yes
+
+- name: start be
+  systemd: name=starrocks-be state=started
+
+- name: wait alive
+  shell: |
+    until mysql -h fe1 -P 9030 -uroot -p$ROOT_PWD -N -B -e \
+      "SELECT count(*) FROM information_schema.backends WHERE IP='{{ ansible_default_ipv4.address }}' AND alive='true'" \
+      | grep -q '^1$'; do sleep 5; done
+
+- name: wait clone queue empty
+  shell: |
+    until [ "$(mysql -h fe1 -P 9030 -uroot -p$ROOT_PWD -N -B -e \
+      'SELECT count(*) FROM information_schema.tablet_schedules WHERE state IN (\"RUNNING\",\"PENDING\")')" -lt 5 ]; do sleep 10; done
+
+# 그리고 serial: 1 (또는 2) 로 호스트별 순차 실행
+- hosts: be
+  serial: 1
+  roles: [upgrade_be]</code></pre>
+
+    <h2 id="post">사후 점검</h2>
+    <ul>
+      <li>SHOW FRONTENDS / BACKENDS — version 일치 확인</li>
+      <li>주요 대시보드 SQL 응답 — 회귀 없는지</li>
+      <li>Routine Load 상태 RUNNING</li>
+      <li>MV 상태 ACTIVE + last_refresh SUCCESS</li>
+      <li>p99 query latency 변화 추적 (Grafana)</li>
+    </ul>
+
+    <h2 id="rollback">롤백 (긴급)</h2>
+    <ol>
+      <li>업그레이드 후 치명적 회귀 발생 시.</li>
+      <li>BE는 같은 절차의 역순으로 이전 버전 심볼릭 링크로 교체.</li>
+      <li>FE는 이전 버전이 같은 메이저 라인이어야 안전. 메이저 다운그레이드는 메타 호환 문제 발생 가능 — 가능하면 피한다.</li>
+      <li>최악의 경우 FE 메타 백업으로 복구 후 이전 버전 재기동.</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 17 BE를 1~2대씩 → 약 8~17 단계. 한 단계당 5~10분이라 새벽 2~6시 윈도면 충분.</li>
+        <li>메이저 점프(3.x → 4.x)는 LTS를 거쳐 단계적으로.</li>
+        <li>장애 시뮬레이션: <strong>분기 1회 BE 1대 강제 종료 → 자동 복구 확인</strong>이 좋은 훈련.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./healthcheck-sql.html">← OPS-2</a>
+        <a href="./backup-runbook.html">다음 → OPS-4. 백업</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/upgrade/" target="_blank" rel="noopener">docs.starrocks.io / Upgrade</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

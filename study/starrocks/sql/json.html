@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-7. JSON — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-json" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / JSON</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-7. JSON</h1>
+
+    <h2 id="type">JSON 타입</h2>
+<pre><code>CREATE TABLE event_log (
+  event_id BIGINT NOT NULL,
+  ts       DATETIME,
+  payload  JSON
+)
+DUPLICATE KEY(event_id, ts)
+DISTRIBUTED BY HASH(event_id);
+
+INSERT INTO event_log VALUES
+  (1, NOW(), parse_json('{"user_id": 100, "action":"click", "tags":["a","b"]}'));</code></pre>
+
+    <h2 id="extract">추출</h2>
+<pre><code>SELECT
+  json_query(payload, '$.user_id')           AS user_id_json,    -- JSON
+  get_json_string(payload, '$.action')       AS action_str,
+  get_json_int(payload, '$.user_id')         AS user_id_int,
+  get_json_double(payload, '$.amount')       AS amount,
+  json_string(json_query(payload, '$.user_id'))  AS as_string
+FROM event_log;</code></pre>
+
+    <h2 id="exists-arr">존재 / 배열</h2>
+<pre><code>SELECT json_exists(payload, '$.tags');       -- bool
+SELECT json_array_length(payload, '$.tags');
+SELECT json_query(payload, '$.tags[0]');     -- 첫 원소
+SELECT json_query(payload, '$.tags[*]');     -- 전체</code></pre>
+
+    <h2 id="object">키 목록 / 객체</h2>
+<pre><code>SELECT json_keys(payload);                   -- ['user_id','action','tags']
+SELECT json_keys(payload, '$.user');         -- 특정 경로 하위 키들
+SELECT json_object('user_id', 100, 'action', 'click');
+SELECT json_array(1, 2, 'three', NULL);</code></pre>
+
+    <h2 id="modify">변경</h2>
+<pre><code>SELECT json_set(payload, '$.action', 'view');
+SELECT json_remove(payload, '$.tags');
+SELECT json_insert(payload, '$.user_grade', 'gold');  -- 없을 때만
+SELECT json_replace(payload, '$.action', 'view');     -- 있을 때만</code></pre>
+
+    <h2 id="parse-print">파싱 / 직렬화</h2>
+<pre><code>SELECT parse_json('{"a":1,"b":2}');        -- 문자열 → JSON
+SELECT json_string(j);                     -- JSON → 문자열
+SELECT cast(j AS STRING);                  -- 동일</code></pre>
+
+    <h2 id="explode">배열을 행으로 펼치기 (UNNEST)</h2>
+<pre><code>SELECT e.event_id, t.tag
+FROM event_log e,
+     unnest(cast(json_query(e.payload, '$.tags[*]') AS ARRAY&lt;STRING&gt;)) AS t(tag);</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>핫 키는 컬럼화</strong>: 자주 조회하는 JSON 키는 적재 단계에서 별도 컬럼으로 추출해 두는 게 빠르고 압축률도 좋음. JSON은 유연성 ↔ 비용 trade-off.</li>
+        <li>v3.x부터 JSON 타입의 인덱스/통계가 점차 강해지고 있음 — 사용 버전의 릴리스 노트 확인.</li>
+        <li>Routine Load + JSON: Kafka에서 JSON 메시지를 받을 때 <code>jsonpaths</code>로 미리 컬럼 매핑(<a href="../loading/routine-load.html">L-2</a>).</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./functions-bitmap-hll.html">← SQL-6. Bitmap·HLL</a>
+        <a href="./mysql-compat.html">다음 → SQL-8. MySQL 호환성</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/json-functions/" target="_blank" rel="noopener">docs.starrocks.io / JSON functions</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

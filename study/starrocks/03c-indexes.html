@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3-2. 인덱스 종류 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="indexes" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 테이블 설정 심화 / 3-2. 인덱스</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>3-2. 인덱스 종류</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks는 자동 인덱스(Prefix · Zone Map · Bloom Filter for short keys) + 사용자 정의 인덱스(Bitmap, Bloom Filter, N-Gram Bloom)를 함께 제공한다.
+      대부분의 경우 자동 인덱스로 충분하고, 특정 쿼리 패턴에 맞춰 추가한다.</p>
+    </div>
+
+    <h2 id="auto">자동 인덱스 (별도 설정 불필요)</h2>
+
+    <h3>Prefix Index</h3>
+    <p>정렬키의 앞쪽 컬럼 조합으로 자동 생성. 정렬키 첫 컬럼 필터에 가장 강함. <strong>최대 36바이트</strong>.</p>
+
+    <h3>Zone Map</h3>
+    <p>각 컬럼의 데이터 블록(보통 64K rows)에 대해 min/max를 보관. WHERE 조건이 들어오면 필요 없는 블록을 통째로 스킵.</p>
+
+    <h2 id="bitmap">Bitmap Index</h2>
+    <p>저카디널리티 컬럼(성별, 상태, 카테고리 등)에 효과 큼. 다중 조건 AND/OR가 비트 연산으로 끝나 매우 빠름.</p>
+<pre><code>-- 생성
+ALTER TABLE orders ADD INDEX idx_status (status) USING BITMAP;
+
+-- 조회
+SHOW INDEX FROM orders;</code></pre>
+    <p>주의: 카디널리티가 높은 컬럼(unique 값이 많은)에 만들면 인덱스 자체가 무거워져 오히려 손해.</p>
+
+    <h2 id="bloom">Bloom Filter Index</h2>
+    <p>WHERE 등호 조건의 빠른 negative lookup용. "이 값이 이 블록에 없음"을 빠르게 판정.</p>
+<pre><code>ALTER TABLE orders SET ("bloom_filter_columns" = "user_id, order_id");</code></pre>
+    <p>중간~고카디널리티의 등호 필터가 자주 들어오는 컬럼에 적합. 범위(BETWEEN, &gt;) 조건엔 무용.</p>
+
+    <h2 id="ngram">N-Gram Bloom Filter (LIKE 가속, v3.x)</h2>
+    <p>STRING 컬럼의 <code>LIKE '%foo%'</code> 부분 일치를 가속.</p>
+<pre><code>ALTER TABLE logs ADD INDEX idx_msg (message)
+USING NGRAMBF (
+  ("gram_num" = "3", "bloom_filter_fpp" = "0.05")
+);</code></pre>
+
+    <h2 id="inverted">Inverted Index (v3.x, 일부)</h2>
+    <p>특정 STRING 토큰 검색 가속용. 키워드 검색에 적합.</p>
+<pre><code>ALTER TABLE logs ADD INDEX idx_msg_inv (message) USING INVERTED;</code></pre>
+
+    <h2 id="choose">선택 가이드</h2>
+    <table>
+      <thead><tr><th>WHERE 패턴</th><th>적합한 인덱스</th></tr></thead>
+      <tbody>
+        <tr><td>정렬키 prefix 등호/범위</td><td>자동(Prefix + Zone Map)</td></tr>
+        <tr><td>저카디널리티 컬럼의 등호/AND/OR</td><td>Bitmap</td></tr>
+        <tr><td>중~고카디널리티 컬럼의 등호 lookup</td><td>Bloom Filter</td></tr>
+        <tr><td>STRING <code>LIKE '%...%'</code></td><td>N-Gram Bloom</td></tr>
+        <tr><td>토큰 검색 (단어 단위)</td><td>Inverted</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>일단 만들지 마세요</strong>: 정렬키 + Zone Map만으로 대부분 빠릅니다. EXPLAIN을 보고 스캔 row가 너무 많을 때 추가.</li>
+        <li><strong>Bitmap은 신중히</strong>: 저카디널리티(≤ 수천)일 때만. 사용자/세션 ID 같은 고카디널리티엔 Bloom Filter.</li>
+        <li><strong>인덱스 추가 후 재구축</strong>: 기존 데이터에 즉시 적용되지 않을 수 있음. <code>ALTER TABLE ... BUILD INDEX</code> 또는 컴팩션 통해 적용.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./03b-partition-bucket.html">← 3-1. 파티션·버킷</a>
+        <a href="./03d-properties.html">다음 → 3-3. PROPERTIES</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/table_design/indexes/" target="_blank" rel="noopener">docs.starrocks.io / Indexes</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAT-3. Lakehouse 가속 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="pat-lake" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 사용 사례 / PAT-3. Lakehouse</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>PAT-3. Lakehouse 가속 (Trino/Presto 대체)</h1>
+
+    <h2 id="goal">목표</h2>
+    <p>이미 Hive/Iceberg/Hudi/Delta로 만들어진 데이터 레이크 위에서, <strong>적재 없이</strong> 빠른 분석을 제공. Trino/Presto 대안.</p>
+
+    <h2 id="arch">아키텍처</h2>
+<div class="mermaid">
+graph LR
+  HDFS["HDFS / S3"]
+  HMS["HMS / Glue / REST"]
+  SR["StarRocks (BE Data Cache)"]
+  MV["Async MV (자체 스토리지)"]
+  BI["BI / 분석가"]
+  HMS --> SR
+  HDFS --> SR
+  SR --> MV --> BI
+  SR --> BI</div>
+
+    <h2 id="catalog">카탈로그 등록</h2>
+<pre><code>CREATE EXTERNAL CATALOG hive_prod
+PROPERTIES (
+  "type"="hive",
+  "hive.metastore.uris"="thrift://hms:9083",
+  "aws.s3.endpoint"="https://s3.example.com",
+  "aws.s3.access_key"="...",
+  "aws.s3.secret_key"="..."
+);
+
+-- 또는 Unified로 Iceberg/Hudi/Delta까지 한 번에
+CREATE EXTERNAL CATALOG lake
+PROPERTIES (
+  "type"="unified",
+  "unified.metastore.type"="hive",
+  "hive.metastore.uris"="thrift://hms:9083",
+  ... -- 인증
+);</code></pre>
+
+    <h2 id="cache">Data Cache 활성</h2>
+<pre><code># be.conf
+datacache_enable    = true
+datacache_disk_path = "/data/sr/cache"
+datacache_disk_size = "400G"
+datacache_mem_size  = "10%"</code></pre>
+
+    <h2 id="mv">자주 쓰는 분석을 MV로</h2>
+<pre><code>CREATE MATERIALIZED VIEW mv_lake_event_d
+PARTITION BY dt
+DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+PROPERTIES (
+  "enable_query_rewrite"="true",
+  "force_external_table_query_rewrite"="true"
+)
+AS
+SELECT date_trunc('day', event_time) dt, user_id, event_type, count(*) cnt
+FROM hive_prod.dwh.events
+GROUP BY 1, 2, 3;</code></pre>
+
+    <h2 id="join">Lake ↔ 내부 마트 결합</h2>
+<pre><code>SELECT u.grade, count(distinct e.user_id) AS uniq
+FROM hive_prod.dwh.events e
+JOIN default_catalog.mart.dim_user u ON e.user_id = u.user_id
+WHERE e.dt = '2026-05-07'
+GROUP BY u.grade;</code></pre>
+
+    <h2 id="strategy">단계 전략</h2>
+    <ol>
+      <li>Hive Catalog 등록 + 분석가에게 SQL 권한 — 즉시 사용 가능.</li>
+      <li>BI 응답이 느린 SQL Top-N 추출 → MV 후보화.</li>
+      <li>MV 만들고 <code>enable_query_rewrite=true</code>로 사용자 코드 변경 없이 가속.</li>
+      <li>Data Cache 도입 후 적중률 모니터링 (<code>be_data_cache_hit_ratio</code>).</li>
+      <li>특별히 핫한 테이블만 내부로 INSERT — 나머지는 외부에 둠.</li>
+    </ol>
+
+    <h2 id="vs-trino">Trino와의 비교</h2>
+    <table>
+      <thead><tr><th>항목</th><th>Trino</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>스토리지</td><td>없음 (스테이트리스)</td><td>자체 + 외부 모두</td></tr>
+        <tr><td>캐시</td><td>별도 구성 필요</td><td>BE Data Cache 내장</td></tr>
+        <tr><td>MV 자동 사용</td><td>X</td><td>O</td></tr>
+        <tr><td>UPSERT</td><td>커넥터 의존</td><td>PK 테이블로 가능</td></tr>
+        <tr><td>일관성</td><td>외부 시스템 정합 의존</td><td>내부 마트는 강한 일관성</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 17 BE 환경에서 SSD 1개를 Data Cache 전용(약 480GB)으로 떼면 17 × 480 = ~8TB의 핫 캐시 — 직전 1~2주 파티션은 항상 로컬에서 응답.</li>
+        <li>Lakehouse의 데이터 정합 책임은 원천에 — Hive/Iceberg 측 컴팩션과 메타 정책 점검이 안정성 핵심.</li>
+        <li>Trino를 운영 중이라면 한쪽에 SR을 함께 두고 단계적으로 트래픽 이동하는 패턴이 안전.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./log-analytics.html">← PAT-2</a>
+        <a href="./ad-analytics.html">다음 → PAT-4. 광고 분석</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/catalog_overview/" target="_blank" rel="noopener">docs.starrocks.io / Catalogs</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

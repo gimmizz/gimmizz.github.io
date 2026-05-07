@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-1. DDL — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-ddl" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / DDL</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-1. DDL — CREATE / ALTER / DROP</h1>
+
+    <h2 id="db">DATABASE</h2>
+<pre><code>CREATE DATABASE IF NOT EXISTS mart;
+CREATE DATABASE mart PROPERTIES ("storage_volume" = "def"); -- Shared-data
+
+DROP DATABASE mart;       -- 비어있어야 함
+DROP DATABASE mart FORCE; -- 안의 테이블까지 모두 제거 (위험)
+SHOW DATABASES;</code></pre>
+
+    <h2 id="table">TABLE</h2>
+<pre><code>-- 가장 많이 쓰는 형태
+CREATE TABLE mart.orders (
+  order_id   BIGINT NOT NULL,
+  user_id    BIGINT,
+  status     VARCHAR(32),
+  amount     DECIMAL(18,2),
+  updated_at DATETIME
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('day', updated_at)
+DISTRIBUTED BY HASH(order_id)
+PROPERTIES (
+  "replication_num"         = "3",
+  "enable_persistent_index" = "true"
+);
+
+-- LIKE / CTAS
+CREATE TABLE mart.orders_copy LIKE mart.orders;
+CREATE TABLE mart.snap AS SELECT * FROM mart.orders WHERE updated_at &gt;= '2026-05-01';
+
+-- 외부 카탈로그(Hive) 테이블 생성 (v3.2+)
+CREATE TABLE hive_prod.dwh.t (... ) PARTITION BY (dt)
+PROPERTIES ("location" = "hdfs://nn/...", "file_format"="parquet");
+
+DROP TABLE mart.orders;
+TRUNCATE TABLE mart.orders;
+TRUNCATE TABLE mart.orders PARTITION (p20260507);</code></pre>
+
+    <h2 id="alter">ALTER TABLE</h2>
+<pre><code>-- 컬럼 추가/삭제/수정
+ALTER TABLE mart.orders ADD COLUMN memo VARCHAR(256) DEFAULT '';
+ALTER TABLE mart.orders DROP COLUMN memo;
+ALTER TABLE mart.orders MODIFY COLUMN status VARCHAR(64);
+
+-- 파티션 관리
+ALTER TABLE mart.orders ADD PARTITION p20260601 VALUES [('2026-06-01'),('2026-06-02'));
+ALTER TABLE mart.orders DROP PARTITION p20260101;
+
+-- 인덱스
+ALTER TABLE mart.orders ADD INDEX idx_status (status) USING BITMAP;
+ALTER TABLE mart.orders DROP INDEX idx_status;
+ALTER TABLE mart.orders SET ("bloom_filter_columns" = "user_id");
+
+-- 동적 파티션 켜기 / 끄기
+ALTER TABLE mart.orders SET ("dynamic_partition.enable" = "true");
+
+-- 복제본 변경
+ALTER TABLE mart.orders SET ("replication_num" = "3");
+
+-- 테이블 이름 변경
+ALTER TABLE mart.orders RENAME orders_v2;</code></pre>
+
+    <h2 id="view">VIEW · MV</h2>
+<pre><code>CREATE VIEW v_paid_orders AS
+SELECT * FROM mart.orders WHERE status = 'paid';
+
+CREATE MATERIALIZED VIEW mv_orders_d
+PARTITION BY dt DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+AS
+SELECT date_trunc('day', updated_at) dt, user_id, count(*) cnt
+FROM mart.orders GROUP BY 1, 2;
+
+DROP VIEW v_paid_orders;
+DROP MATERIALIZED VIEW mv_orders_d;</code></pre>
+
+    <h2 id="external">EXTERNAL CATALOG</h2>
+<pre><code>CREATE EXTERNAL CATALOG hive_prod
+PROPERTIES ("type"="hive", "hive.metastore.uris"="thrift://hms:9083");
+
+DROP CATALOG hive_prod;
+SHOW CATALOGS;
+SET CATALOG hive_prod;</code></pre>
+
+    <h2 id="user">USER · ROLE</h2>
+<pre><code>CREATE USER 'analyst' IDENTIFIED BY 'pass';
+CREATE ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN DATABASE mart TO ROLE bi_reader;
+GRANT bi_reader TO USER 'analyst';
+SET PASSWORD FOR 'analyst' = PASSWORD('newpass');
+DROP USER 'analyst';</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>운영용 DDL은 항상 <strong>리뷰 PR</strong>을 거쳐 적용 — 잘못된 ALTER로 schema가 깨지면 리커버리가 어렵습니다.</li>
+        <li><code>DROP TABLE</code>은 즉시 비가역. 운영에서는 <code>RENAME</code> 후 며칠 두었다가 삭제하는 패턴 권장.</li>
+        <li>외부 카탈로그 테이블의 DDL은 원천 시스템 측 정책과 충돌하지 않도록 주의 — Hive/Iceberg는 원천에서 만드는 게 일반적.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../06-query-mv.html">← 7. 쿼리·MV</a>
+        <a href="./dml.html">다음 → SQL-2. DML</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-statements/" target="_blank" rel="noopener">docs.starrocks.io / SQL Statements</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

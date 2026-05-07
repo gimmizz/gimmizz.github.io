@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INT-3. Dagster + dbt — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-dagster" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 외부 도구 / INT-3. Dagster + dbt</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>INT-3. Dagster + dbt-starrocks 파이프라인</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>Dagster는 dbt 모델을 자동으로 <strong>asset</strong>으로 인식한다. <code>dagster-dbt</code>로 dbt-starrocks 프로젝트를 감싸면, 적재→변환→MV 트리거를 한 그래프로 관리할 수 있다.</p>
+    </div>
+
+    <h2 id="arch">아키텍처</h2>
+<div class="mermaid">
+graph TD
+  KAFKA["Kafka / Files"]
+  RL["Routine Load /<br/>Stream Load"]
+  RAW["mart.raw_*"]
+  DBT["dbt run<br/>(dbt-starrocks)"]
+  STAGE["mart.stg_*"]
+  MART["mart.dim/fact_*"]
+  MV["Async MV refresh"]
+  BI["BI"]
+  DAG["Dagster Schedule / Sensor"]
+
+  KAFKA --> RL --> RAW
+  DAG --> DBT
+  RAW --> DBT --> STAGE --> MART --> MV --> BI</div>
+
+    <h2 id="install">설치</h2>
+<pre><code>pip install dagster dagster-webserver dagster-dbt dbt-core dbt-starrocks</code></pre>
+
+    <h2 id="project">프로젝트 구조</h2>
+<pre><code>my_pipeline/
+├── pyproject.toml
+├── my_pipeline/
+│   ├── __init__.py
+│   ├── definitions.py        # Dagster Definitions
+│   └── dbt/
+│       └── starrocks_proj/   # dbt 프로젝트
+│           ├── dbt_project.yml
+│           ├── models/
+│           └── profiles.yml</code></pre>
+
+    <h2 id="defs">definitions.py</h2>
+<pre><code>from pathlib import Path
+from dagster import Definitions, ScheduleDefinition, define_asset_job
+from dagster_dbt import DbtCliResource, dbt_assets, DbtProject
+
+DBT_DIR = Path(__file__).parent / "dbt" / "starrocks_proj"
+dbt_project = DbtProject(project_dir=DBT_DIR)
+dbt_project.prepare_if_dev()
+
+@dbt_assets(manifest=dbt_project.manifest_path)
+def starrocks_dbt_assets(context, dbt: DbtCliResource):
+    yield from dbt.cli(["build"], context=context).stream()
+
+dbt_resource = DbtCliResource(project_dir=str(DBT_DIR), profiles_dir=str(DBT_DIR))
+
+daily_job = define_asset_job("daily_job", selection="*")
+schedule  = ScheduleDefinition(job=daily_job, cron_schedule="30 2 * * *")  # 매일 02:30
+
+defs = Definitions(
+    assets=[starrocks_dbt_assets],
+    resources={"dbt": dbt_resource},
+    schedules=[schedule],
+)</code></pre>
+
+    <h2 id="run">실행</h2>
+<pre><code>dagster dev   # 개발 모드 — 웹 UI http://localhost:3000
+
+# 운영 배포
+dagster-webserver -h 0.0.0.0 -p 3000 -m my_pipeline.definitions
+dagster-daemon run -m my_pipeline.definitions</code></pre>
+
+    <h2 id="trigger-mv">MV refresh 트리거</h2>
+    <p>dbt가 마트 테이블을 다 만든 직후 SR의 MV를 명시적으로 리프레시하고 싶다면, dbt 모델 사이에 SR <code>REFRESH MATERIALIZED VIEW</code>를 호출하는 <strong>Dagster asset</strong>을 추가하거나 dbt의 <code>post-hook</code>으로 처리.</p>
+<pre><code># dbt 모델의 post-hook 예
+{{ config(post_hook="REFRESH MATERIALIZED VIEW mart.mv_orders_d FORCE") }}
+
+-- 또는 별도 dagster op
+from dagster import op
+import pymysql
+@op
+def refresh_mv(context):
+    conn = pymysql.connect(host="fe1", port=9030, user="dbt_user",
+                           password="...", autocommit=True)
+    with conn.cursor() as cur:
+        cur.execute("REFRESH MATERIALIZED VIEW mart.mv_orders_d FORCE")</code></pre>
+
+    <h2 id="sensor">Sensor — 외부 적재 완료를 감지</h2>
+<pre><code>from dagster import sensor, RunRequest, SensorEvaluationContext
+@sensor(job=daily_job)
+def kafka_done_sensor(context: SensorEvaluationContext):
+    # 예: SR에서 max(updated_at)이 오늘로 도달하면 dbt 실행
+    import pymysql
+    conn = pymysql.connect(host="fe1", port=9030, user="dbt_user", password="...")
+    with conn.cursor() as cur:
+        cur.execute("SELECT max(updated_at) FROM mart.raw_orders")
+        ts = cur.fetchone()[0]
+    if ts and ts.date().isoformat() == context.cursor:
+        return  # 이미 처리
+    return RunRequest(run_key=str(ts), run_config={})</code></pre>
+
+    <h2 id="ui">관측 / UI</h2>
+    <ul>
+      <li>Dagster UI에서 <strong>asset graph</strong>로 dbt 모델 의존성을 시각화.</li>
+      <li>각 모델 실행 시간/실패 그래프 자동.</li>
+      <li>SR 측의 <code>information_schema.task_runs</code>(MV)와 dagster의 jobs를 함께 보면 파이프라인 끝점이 분명.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>전용 계정 분리</strong>: <code>dbt_user</code>, <code>dagster_user</code>를 분리하고 RBAC로 권한 최소화.</li>
+        <li><strong>Resource Group 격리</strong>: dbt run이 BI 트래픽을 잡아먹지 않게 <code>rg_etl</code> 사용.</li>
+        <li><strong>장애 대응</strong>: Routine Load PAUSED → Dagster sensor가 잡아 Slack/웍스 알림.</li>
+        <li>본 페이지의 코드는 <em>예시 패턴</em>이며 dagster/dbt 어댑터 버전에 따라 미세 차이가 있으니 운영 전 검증 필수.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./dbt.html">← INT-2. dbt</a>
+        <a href="./airflow.html">다음 → INT-4. Airflow</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.dagster.io/integrations/dbt" target="_blank" rel="noopener">dagster.io / dbt 통합</a>,
+          <a href="https://github.com/StarRocks/dbt-starrocks" target="_blank" rel="noopener">github.com/StarRocks/dbt-starrocks</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-9. Kudu Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-kudu" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-9. Kudu</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-9. Kudu Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>Apache Kudu의 마스터에 연결해 Kudu 테이블을 SELECT한다. 변경이 잦은 Kudu의 데이터를 OLAP에 바로 합류시킬 때 유용.</p>
+    </div>
+
+    <h2 id="basic">PROPERTIES</h2>
+<pre><code>CREATE EXTERNAL CATALOG kudu_prod
+PROPERTIES (
+  "type"               = "kudu",
+  "kudu.master"        = "kudu-master1:7051,kudu-master2:7051,kudu-master3:7051",
+  "kudu.schema-emulation.enabled" = "true",
+  "kudu.schema-emulation.prefix"  = "default."
+);</code></pre>
+
+    <h2 id="features">활용</h2>
+    <ul>
+      <li>Kudu의 PK 기반 테이블을 SELECT — 변경이 즉시 반영된 데이터를 분석 쿼리에서 사용.</li>
+      <li>Hive/Iceberg와 JOIN해 마스터(Kudu) ↔ 이벤트(Hive) 결합 분석.</li>
+    </ul>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>StarRocks에서 Kudu 쓰기는 미지원.</li>
+      <li>Kudu Tablet Server에 모든 BE가 접근 가능해야 함 (방화벽 확인).</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>사내에 Kudu 기반 실시간 적재가 이미 있다면 그대로 분석에 합류시킬 수 있음. 다만 Kudu의 부하가 걱정이라면 야간에 Hive/Iceberg로 스냅샷 백업하고 그쪽을 분석하는 패턴이 더 안전.</p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./elasticsearch.html">← 6-8. Elasticsearch</a>
+        <a href="./maxcompute.html">다음 → 6-10. MaxCompute</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/kudu_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Kudu catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

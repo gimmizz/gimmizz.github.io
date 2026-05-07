@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L-4. INSERT · FILES() — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-insert" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / L-4. INSERT · FILES()</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>L-4. INSERT INTO ... SELECT · FILES() 함수</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>SQL 한 줄로 적재한다. 외부 카탈로그가 있으면 SELECT, 파일만 있으면 <code>FILES()</code> 테이블 함수.</p>
+    </div>
+
+    <h2 id="from-catalog">외부 카탈로그 → 내부 마트</h2>
+<pre><code>INSERT INTO default_catalog.mart.events
+SELECT event_time, user_id, event_type, payload
+FROM hive_prod.dwh.events
+WHERE dt = '2026-05-07';</code></pre>
+
+    <h2 id="files">FILES() 테이블 함수 (v3.x)</h2>
+<pre><code>-- HDFS/S3의 parquet 파일을 즉시 SELECT
+SELECT count(*)
+FROM FILES(
+  "path"   = "s3://bucket/path/*.parquet",
+  "format" = "parquet",
+  "aws.s3.endpoint"   = "https://minio.internal:9000",
+  "aws.s3.access_key" = "...",
+  "aws.s3.secret_key" = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);
+
+-- 그대로 적재
+INSERT INTO mart.events
+SELECT *
+FROM FILES(
+  "path"   = "s3://bucket/path/*.parquet",
+  "format" = "parquet",
+  "aws.s3.endpoint" = "..."
+);
+
+-- CSV / JSON 도 가능
+SELECT *
+FROM FILES("path"="hdfs://nn/tmp/data.json", "format"="json");</code></pre>
+
+    <h2 id="ctas">CTAS — 즉석 마트 생성</h2>
+<pre><code>CREATE TABLE mart.snap_users
+PROPERTIES ("replication_num" = "3")
+AS
+SELECT user_id, count(*) AS cnt
+FROM hive_prod.dwh.events
+WHERE dt = '2026-05-07'
+GROUP BY user_id;</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>FILES()는 단발 처리에 가장 편함</strong>: 분석가가 파일만 받아서 즉시 검증할 때 진가.</li>
+        <li><strong>정기 ETL은 INSERT INTO + SELECT</strong>: 외부 카탈로그를 한 번 만들어 두면 그 위에 SQL만 짜면 됨. Async MV로 이 로직을 자동화하면 ETL 코드가 거의 사라짐.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./broker-load.html">← L-3. Broker</a>
+        <a href="../catalogs/index.html">다음 → 6. 카탈로그</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/loading/InsertInto/" target="_blank" rel="noopener">docs.starrocks.io / INSERT INTO</a>,
+          <a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/table-functions/files/" target="_blank" rel="noopener">/FILES()</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

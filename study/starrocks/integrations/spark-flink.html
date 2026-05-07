@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INT-5. Spark / Flink — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-spark" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 외부 도구 / INT-5. Spark / Flink</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>INT-5. Spark / Flink Connector</h1>
+
+    <h2 id="spark">Spark Connector</h2>
+    <p>StarRocks 공식 Spark Connector — 읽기·쓰기 모두 지원. Maven 좌표는 버전에 따라 다름. <code>com.starrocks:starrocks-spark-connector-3.x_2.12</code> 형태.</p>
+
+    <h3>읽기</h3>
+<pre><code>val df = spark.read.format("starrocks")
+  .option("starrocks.fenodes", "fe1:8030,fe2:8030")
+  .option("starrocks.table.identifier", "mart.orders")
+  .option("starrocks.user", "etl")
+  .option("starrocks.password", "...")
+  .load()
+df.show()</code></pre>
+
+    <h3>쓰기 (Stream Load 기반)</h3>
+<pre><code>df.write.format("starrocks")
+  .option("starrocks.fenodes", "fe1:8030,fe2:8030")
+  .option("starrocks.table.identifier", "mart.orders")
+  .option("starrocks.user", "etl")
+  .option("starrocks.password", "...")
+  .mode("append")
+  .save()</code></pre>
+
+    <h2 id="flink">Flink Connector</h2>
+    <p>스트리밍 적재 표준. Flink CDC + StarRocks Connector로 OLTP → OLAP 실시간 ingestion.</p>
+
+    <h3>SQL 모드 (Flink SQL)</h3>
+<pre><code>CREATE TABLE sr_orders (
+  order_id   BIGINT,
+  user_id    BIGINT,
+  status     STRING,
+  amount     DECIMAL(18,2),
+  updated_at TIMESTAMP(3)
+) WITH (
+  'connector' = 'starrocks',
+  'jdbc-url'  = 'jdbc:mysql://fe1:9030',
+  'load-url'  = 'fe1:8030;fe2:8030',
+  'database-name' = 'mart',
+  'table-name'    = 'orders',
+  'username' = 'etl',
+  'password' = '...',
+  'sink.properties.format' = 'json',
+  'sink.properties.strip_outer_array' = 'true'
+);
+
+INSERT INTO sr_orders
+SELECT order_id, user_id, status, amount, updated_at
+FROM kafka_orders;</code></pre>
+
+    <h3>DataStream 모드</h3>
+<pre><code>StarRocksSinkOptions options = StarRocksSinkOptions.builder()
+  .withProperty("jdbc-url", "jdbc:mysql://fe1:9030")
+  .withProperty("load-url", "fe1:8030;fe2:8030")
+  .withProperty("database-name","mart")
+  .withProperty("table-name","orders")
+  .withProperty("username","etl")
+  .withProperty("password","...")
+  .withProperty("sink.properties.format", "json")
+  .build();
+
+stream.addSink(StarRocksSink.sink(options));</code></pre>
+
+    <h2 id="cdc">Flink CDC + SR 패턴</h2>
+<pre><code>-- 소스: Flink CDC MySQL
+CREATE TABLE src_orders (...) WITH ('connector'='mysql-cdc', ...);
+
+-- 싱크: StarRocks PK 테이블 (자동 UPSERT/DELETE)
+CREATE TABLE snk_orders (...) WITH ('connector'='starrocks', ...);
+
+INSERT INTO snk_orders SELECT * FROM src_orders;</code></pre>
+
+    <h2 id="opts">자주 쓰는 옵션</h2>
+    <ul>
+      <li><code>sink.buffer-flush.max-rows</code> / <code>max-bytes</code> / <code>interval-ms</code> — 배치 사이즈/시간.</li>
+      <li><code>sink.properties.format</code> — json / csv.</li>
+      <li><code>sink.properties.partial_update</code> — PK 테이블의 일부 컬럼만 갱신.</li>
+      <li><code>sink.label-prefix</code> — Stream Load label 접두어. 충돌 방지.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>실시간 ingestion은 Flink + SR 패턴이 가장 표준. Spark는 주로 일배치 / 백필.</li>
+        <li>label 접두어를 잡 이름으로 두면 SR <code>SHOW LOAD</code>에서 추적이 쉬움.</li>
+        <li>Spark 큰 INSERT는 Resource Group으로 격리. 야간에 실행.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./airflow.html">← INT-4. Airflow</a>
+        <a href="../04-deployment.html">다음 → 4. 배포</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/integrations/" target="_blank" rel="noopener">docs.starrocks.io / Integrations</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

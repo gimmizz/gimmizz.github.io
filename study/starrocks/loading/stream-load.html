@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L-1. Stream Load — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-stream" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / L-1. Stream Load</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>L-1. Stream Load</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>HTTP PUT으로 한 파일을 한 트랜잭션으로 적재. 가장 단순하고 자동화하기 쉬워 ETL 도구가 흔히 사용한다.</p>
+    </div>
+
+    <h2 id="basic">기본 호출</h2>
+<pre><code>curl --location-trusted -u user:passwd \
+     -H "label:orders_20260507_001" \
+     -H "format:CSV" \
+     -H "column_separator:," \
+     -H "columns:order_id,user_id,status,amount,updated_at" \
+     -T orders.csv \
+     http://fe1:8030/api/mart/orders/_stream_load</code></pre>
+
+    <h2 id="json">JSON 적재</h2>
+<pre><code>curl --location-trusted -u user:passwd \
+     -H "label:events_20260507_001" \
+     -H "format:JSON" \
+     -H "strip_outer_array:true" \
+     -H "jsonpaths:[\"$.event_time\",\"$.user_id\",\"$.event_type\"]" \
+     -H "columns:event_time,user_id,event_type" \
+     -T events.json \
+     http://fe1:8030/api/mart/events/_stream_load</code></pre>
+
+    <h2 id="upsert-delete">UPSERT / DELETE (Primary Key 테이블)</h2>
+<pre><code># UPSERT (기본)
+-H "columns:order_id,user_id,status,amount,updated_at"
+
+# DELETE (해당 row 삭제)
+-H "merge_type:DELETE"
+-H "columns:order_id"
+
+# MERGE (열별 PARTIAL UPDATE도 가능)
+-H "partial_update:true"
+-H "columns:order_id,status"</code></pre>
+
+    <h2 id="opts">자주 쓰는 옵션</h2>
+    <table>
+      <thead><tr><th>헤더</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td>label</td><td>중복 방지 식별자. 필수 권장</td></tr>
+        <tr><td>format</td><td>CSV / JSON / Parquet / ORC</td></tr>
+        <tr><td>column_separator</td><td>CSV 구분자 (예: <code>,</code>)</td></tr>
+        <tr><td>columns</td><td>적재할 컬럼 순서 / 표현식</td></tr>
+        <tr><td>where</td><td>적재 시 필터링</td></tr>
+        <tr><td>max_filter_ratio</td><td>허용 실패 비율 (0~1)</td></tr>
+        <tr><td>timeout</td><td>초 단위</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="check">결과 확인</h2>
+<pre><code>SHOW STREAM LOAD WHERE LABEL='orders_20260507_001'\G
+
+-- 또는 응답 JSON의 ErrorURL을 따라가면 실패 행이 적힘</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>FE 어디로 보내도 OK이지만, 사내 LB 뒤에 두면 단일 진입점이 깔끔.</li>
+        <li>label은 <code>{table}_{yyyymmddHHMMSS}_{idx}</code>가 추적 용이.</li>
+        <li>실패 행이 자주 나오는 ETL은 <code>max_filter_ratio</code>를 살짝 열어 두되, 모니터링에서 추적.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./index.html">← L. 개요</a>
+        <a href="./routine-load.html">다음 → L-2. Routine</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/StreamLoad/" target="_blank" rel="noopener">docs.starrocks.io / Stream Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

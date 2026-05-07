@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-3. 날짜·시간 함수 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-date" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / 날짜·시간</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-3. 날짜·시간 함수</h1>
+
+    <h2 id="now">현재 시각</h2>
+    <table>
+      <thead><tr><th>함수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>NOW()</code> / <code>CURRENT_TIMESTAMP()</code></td><td>현재 DATETIME</td></tr>
+        <tr><td><code>CURDATE()</code> / <code>CURRENT_DATE()</code></td><td>현재 DATE</td></tr>
+        <tr><td><code>UTC_TIMESTAMP()</code></td><td>UTC 시각</td></tr>
+        <tr><td><code>UNIX_TIMESTAMP([dt])</code></td><td>유닉스 epoch 초</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="trunc">truncate / 형변환</h2>
+<pre><code>-- 핵심: date_trunc는 파티션 키와 같이 가장 자주 쓰는 함수
+SELECT date_trunc('day',  now());     -- 2026-05-07 00:00:00
+SELECT date_trunc('hour', now());
+SELECT date_trunc('month', now());
+SELECT date_trunc('week', now());     -- 월요일 시작
+
+-- 형변환
+SELECT CAST('2026-05-07' AS DATE);
+SELECT CAST('2026-05-07 10:00:00' AS DATETIME);
+SELECT FROM_UNIXTIME(1746547200);
+SELECT UNIX_TIMESTAMP('2026-05-07 10:00:00');</code></pre>
+
+    <h2 id="diff">차이 / 가감</h2>
+<pre><code>SELECT DATEDIFF('2026-05-07','2026-05-01');        -- 6 (일 차이)
+SELECT DATE_DIFF('hour', t1, t2);                  -- 단위 명시
+SELECT TIMESTAMPDIFF(SECOND, t1, t2);
+SELECT DATE_ADD('2026-05-07', INTERVAL 7 DAY);
+SELECT DATE_SUB(now(), INTERVAL 1 HOUR);
+SELECT now() + INTERVAL 30 MINUTE;</code></pre>
+
+    <h2 id="format">포맷</h2>
+<pre><code>SELECT DATE_FORMAT(now(), '%Y-%m-%d %H:%i:%s');     -- 2026-05-07 10:00:00
+SELECT DATE_FORMAT(now(), '%Y%m%d');                -- 20260507
+SELECT STR_TO_DATE('07/05/2026','%d/%m/%Y');</code></pre>
+
+    <h2 id="extract">추출</h2>
+    <table>
+      <thead><tr><th>함수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>YEAR(dt)</code> / <code>MONTH(dt)</code> / <code>DAY(dt)</code></td><td>년/월/일</td></tr>
+        <tr><td><code>HOUR(dt)</code> / <code>MINUTE(dt)</code> / <code>SECOND(dt)</code></td><td>시/분/초</td></tr>
+        <tr><td><code>DAYOFWEEK(dt)</code></td><td>1=일 ... 7=토 (MySQL 호환)</td></tr>
+        <tr><td><code>DAYOFYEAR(dt)</code></td><td>해의 며칠째</td></tr>
+        <tr><td><code>WEEK(dt)</code></td><td>해의 몇 번째 주</td></tr>
+        <tr><td><code>QUARTER(dt)</code></td><td>분기 1~4</td></tr>
+        <tr><td><code>EXTRACT(unit FROM dt)</code></td><td>표준 SQL 형식</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="window">기간 윈도</h2>
+<pre><code>-- 마지막 7일
+WHERE event_time &gt;= now() - INTERVAL 7 DAY
+
+-- 지난 달
+WHERE date_trunc('month', event_time) = date_trunc('month', now() - INTERVAL 1 MONTH)
+
+-- 시간대 변환 (UTC ↔ 로컬)
+SELECT CONVERT_TZ('2026-05-07 10:00:00', '+00:00', '+09:00');</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>파티션 키는 거의 항상 <code>date_trunc('day', ...)</code> 또는 <code>date_trunc('hour', ...)</code>. 시간대는 적재 시점에 통일(보통 KST 또는 UTC).</li>
+        <li><code>FROM_UNIXTIME</code>·<code>UNIX_TIMESTAMP</code>는 epoch 기반 적재(예: 모바일 로그)에서 자주 사용. 적재 시 DATETIME으로 통일하면 쿼리가 단순해짐.</li>
+        <li>대시보드의 "오늘" 필터는 <code>WHERE dt = CURDATE()</code>가 가장 빠름 — 함수 적용 없이 파티션 키와 일치.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./dml.html">← SQL-2. DML</a>
+        <a href="./functions-string.html">다음 → SQL-4. 문자열</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/date-time-functions/" target="_blank" rel="noopener">docs.starrocks.io / Date functions</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

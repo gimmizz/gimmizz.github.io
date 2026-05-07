@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L-3. Broker Load — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-broker" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / L-3. Broker Load</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>L-3. Broker Load (HDFS / S3 대용량 일괄)</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>HDFS 또는 S3에 있는 대용량 파일을 한 번에 적재하는 비동기 잡. 큰 백필이나 일자별 풀 적재에 적합.</p>
+    </div>
+
+    <h2 id="basic">예시 — HDFS의 parquet 적재</h2>
+<pre><code>LOAD LABEL mart.events_20260507 (
+  DATA INFILE("hdfs://nn/warehouse/staging/events/dt=2026-05-07/*")
+  INTO TABLE events
+  FORMAT AS "parquet"
+  (event_time, user_id, event_type, payload)
+  WHERE event_type IN ('view','click')
+)
+WITH BROKER hdfs_broker (
+  "username" = "sr",
+  "password" = ""
+)
+PROPERTIES (
+  "timeout" = "7200",
+  "max_filter_ratio" = "0.01"
+);</code></pre>
+
+    <h2 id="s3">S3</h2>
+<pre><code>LOAD LABEL mart.s3_load_001 (
+  DATA INFILE("s3a://bucket/path/*.parquet")
+  INTO TABLE events
+  FORMAT AS "parquet"
+)
+WITH BROKER (
+  "fs.s3a.access.key" = "...",
+  "fs.s3a.secret.key" = "...",
+  "fs.s3a.endpoint"   = "https://minio.internal:9000"
+);</code></pre>
+
+    <h2 id="ops">상태 / 취소</h2>
+<pre><code>SHOW LOAD WHERE LABEL = 'mart.events_20260507'\G
+
+-- 진행 중 잡 취소
+CANCEL LOAD FROM mart WHERE LABEL = 'mart.events_20260507';</code></pre>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>Broker가 별도 프로세스(필요시)인 경우 deploy/health 모니터링 필요. 최근 버전은 BE 내장 broker가 일반적.</li>
+      <li>HDFS HA·Kerberos는 Hive Catalog와 같은 사전 준비 필요(<a href="../catalogs/hive.html#kerberos">참고</a>).</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>이미 Hive Catalog를 붙였다면 <code>INSERT INTO mart.events SELECT * FROM hive_prod.dwh.events WHERE dt='2026-05-07'</code>가 더 간단할 때가 많음. Broker Load는 외부 카탈로그를 안 만든 상태에서의 단발 백필에 유용.</li>
+        <li>대용량 잡은 새벽에. ETL 전용 Resource Group으로 격리.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./routine-load.html">← L-2. Routine</a>
+        <a href="./insert-files.html">다음 → L-4. INSERT/FILES</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/BrokerLoad/" target="_blank" rel="noopener">docs.starrocks.io / Broker Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

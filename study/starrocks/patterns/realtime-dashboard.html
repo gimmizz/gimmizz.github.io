@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAT-1. 실시간 대시보드 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="pat-rt" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 사용 사례 / PAT-1. 실시간 대시보드</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>PAT-1. 실시간 대시보드 패턴</h1>
+
+    <h2 id="goal">목표</h2>
+    <p>Kafka로 들어오는 변경 이벤트를 거의 실시간(수~수십 초)으로 BI 대시보드에 반영. 동시성 100~1,000+ 처리.</p>
+
+    <h2 id="arch">아키텍처</h2>
+<div class="mermaid">
+graph LR
+  SRC["소스 OLTP (MySQL/PG)"]
+  CDC["Debezium / Flink CDC"]
+  KAFKA["Kafka"]
+  RL["Routine Load"]
+  PK["Primary Key 테이블"]
+  MV["Async MV (분 단위 refresh)"]
+  BI["BI / 대시보드"]
+  SRC --> CDC --> KAFKA --> RL --> PK --> MV --> BI</div>
+
+    <h2 id="table">스키마</h2>
+<pre><code>-- 주문 PK 테이블
+CREATE TABLE mart.orders (
+  order_id   BIGINT NOT NULL,
+  user_id    BIGINT,
+  status     VARCHAR(32),
+  amount     DECIMAL(18,2),
+  updated_at DATETIME
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('day', updated_at)
+DISTRIBUTED BY HASH(order_id)
+PROPERTIES (
+  "replication_num"         = "3",
+  "enable_persistent_index" = "true",
+  "dynamic_partition.enable"= "true",
+  "dynamic_partition.time_unit" = "DAY",
+  "dynamic_partition.start" = "-90",
+  "dynamic_partition.end"   = "3"
+);
+
+-- 분 단위 집계 MV
+CREATE MATERIALIZED VIEW mart.mv_orders_minute
+PARTITION BY dt DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 1 MINUTE)
+PROPERTIES ("enable_query_rewrite" = "true")
+AS
+SELECT date_trunc('minute', updated_at) AS ts,
+       date_trunc('day',    updated_at) AS dt,
+       status,
+       count(*)     AS cnt,
+       sum(amount)  AS amt
+FROM mart.orders
+GROUP BY 1, 2, 3;</code></pre>
+
+    <h2 id="ingest">Routine Load 잡</h2>
+<pre><code>CREATE ROUTINE LOAD mart.orders_cdc ON orders
+COLUMNS (order_id, user_id, status, amount, updated_at)
+PROPERTIES (
+  "format"="JSON",
+  "jsonpaths"="[\"$.id\",\"$.user_id\",\"$.status\",\"$.amount\",\"$.updated_at\"]",
+  "max_batch_interval"="5",
+  "max_batch_rows"="100000"
+)
+FROM KAFKA (
+  "kafka_broker_list"="kafka:9092",
+  "kafka_topic"="cdc.orders"
+);</code></pre>
+
+    <h2 id="bi">BI 사용자 SQL</h2>
+<pre><code>SELECT date_trunc('minute', updated_at) ts, status, count(*) cnt
+FROM mart.orders
+WHERE updated_at &gt;= now() - INTERVAL 1 HOUR
+GROUP BY 1, 2 ORDER BY 1;</code></pre>
+    <p>옵티마이저가 자동으로 <code>mv_orders_minute</code>로 rewrite — 응답이 즉시.</p>
+
+    <h2 id="ops">운영 포인트</h2>
+    <ul>
+      <li><strong>Backpressure</strong>: Routine Load의 batch가 막히지 않게 BE 부하 모니터링.</li>
+      <li><strong>지연 측정</strong>: Kafka offset lag와 SR <code>updated_at</code> 차이를 메트릭화.</li>
+      <li><strong>MV 신선도</strong>: 1분 주기로 부족하면 30초까지 줄일 수 있지만, 약 17 BE 환경에서 1분이 안전한 시작점.</li>
+      <li><strong>Schema 진화</strong>: 신규 컬럼은 OLTP에 먼저 → CDC가 흘려보내면 SR ALTER ADD COLUMN.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 17 BE × 256GB이면 동시 사용자 100~1,000은 충분히 처리 가능. Resource Group을 BI/ETL 분리.</li>
+        <li>CDC 실패 → 손실이 아니라 지연. PAUSED 알람 필수.</li>
+        <li>주간 보고용 무거운 SQL은 별도 야간 MV로 분리 — 실시간 MV와 다른 잡으로.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../sql/mysql-compat.html">← SQL-8</a>
+        <a href="./log-analytics.html">다음 → PAT-2. 로그 분석</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/RoutineLoad/" target="_blank" rel="noopener">docs.starrocks.io / Routine Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>5-4. 보안 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="security" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 5-4. 보안</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>5-4. 보안 — SSL · LDAP · RBAC</h1>
+
+    <h2 id="ssl">SSL/TLS — MySQL 프로토콜 암호화</h2>
+<pre><code># fe.conf
+enable_ssl = true
+ssl_keystore_location = /opt/sr/ssl/server.keystore
+ssl_keystore_password = changeit</code></pre>
+    <p>클라이언트 측에서 <code>--ssl-mode=REQUIRED</code> 등으로 강제 암호화. 사내망이라도 RBAC와 함께 적용 권장.</p>
+
+    <h2 id="ldap">LDAP / Active Directory 통합</h2>
+<pre><code># fe.conf
+authentication_ldap_simple_server_host = ldap.example.com
+authentication_ldap_simple_server_port = 389
+authentication_ldap_simple_bind_root_dn = "cn=admin,dc=example,dc=com"
+authentication_ldap_simple_bind_root_pwd = "..."
+authentication_ldap_simple_bind_base_dn  = "ou=people,dc=example,dc=com"
+authentication_ldap_simple_user_search_attr = "uid"</code></pre>
+<pre><code>-- LDAP 인증 사용자
+CREATE USER 'jdoe' IDENTIFIED WITH authentication_ldap_simple AS 'cn=jdoe,ou=people,dc=example,dc=com';</code></pre>
+
+    <h2 id="rbac">RBAC — 역할 기반 권한</h2>
+<pre><code>-- 역할
+CREATE ROLE bi_reader;
+CREATE ROLE etl_writer;
+CREATE ROLE platform_admin;
+
+-- 권한
+GRANT SELECT ON ALL TABLES IN DATABASE mart TO ROLE bi_reader;
+GRANT INSERT, SELECT ON DATABASE mart TO ROLE etl_writer;
+GRANT USAGE ON CATALOG hive_prod TO ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN ALL DATABASES IN CATALOG hive_prod TO ROLE bi_reader;
+GRANT operate ON SYSTEM TO ROLE platform_admin;
+
+-- 사용자 - 역할
+GRANT bi_reader TO USER 'jdoe';
+GRANT bi_reader, etl_writer TO USER 'svc_etl';</code></pre>
+
+    <h2 id="row-col">Row-level / Column-level 보안 (v3.x)</h2>
+<pre><code>-- 컬럼 마스킹 정책
+CREATE MASKING POLICY mask_email AS (val STRING)
+RETURNS STRING -&gt;
+  CASE WHEN current_role() IN ('bi_reader')
+       THEN regexp_replace(val, '(^.).+(@.+$)', '\\1***\\2')
+       ELSE val END;
+
+ALTER TABLE mart.users MODIFY COLUMN email SET MASKING POLICY mask_email;</code></pre>
+<pre><code>-- 행 레벨 정책
+CREATE ROW ACCESS POLICY country_filter AS (country STRING)
+RETURNS BOOLEAN -&gt;
+  current_user() = 'svc_etl' OR country = 'KR';
+
+ALTER TABLE mart.events ADD ROW ACCESS POLICY country_filter ON (country);</code></pre>
+
+    <h2 id="audit">Audit Log</h2>
+    <p><code>audit_loader</code> 플러그인으로 Audit log를 StarRocks 자체 테이블로 적재. 누가 무엇을 조회했는지 SQL로 검증 가능.</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>처음부터 LDAP 통합</strong> — 사용자별 비밀번호 관리 부담을 없애고, 퇴사 시 자동 비활성화.</li>
+        <li><strong>역할 5~7개 표준화</strong>: <code>platform_admin</code> / <code>data_eng</code> / <code>etl_writer</code> / <code>bi_reader</code> / <code>analyst_advanced</code> / <code>read_only_partner</code> 정도.</li>
+        <li><strong>외부 카탈로그 권한도 동일 역할에 묶을 것</strong>: 카탈로그 권한이 따로 놀면 사용자 혼란.</li>
+        <li><strong>Audit log → 별도 마트로 일자별 적재</strong>: 컴플라이언스 대응에 필수.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./10-shared-data.html">← 5-3. Shared-Data</a>
+        <a href="./loading/index.html">다음 → 데이터 적재</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/administration/user_privs/authorization/User_privilege/" target="_blank" rel="noopener">docs.starrocks.io / Authorization</a>,
+          <a href="https://docs.starrocks.io/docs/administration/user_privs/authentication/ldap_authentication/" target="_blank" rel="noopener">/LDAP</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

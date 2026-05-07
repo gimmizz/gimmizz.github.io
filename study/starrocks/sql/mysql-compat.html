@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-8. MySQL 호환성 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-mysql" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / MySQL 호환성</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-8. MySQL 호환성 — 비슷하지만 다른 점</h1>
+
+    <p>StarRocks는 MySQL 와이어 프로토콜을 그대로 사용해 도구 호환성이 매우 높지만, <strong>분석 워크로드를 위해 설계된 SQL 다이얼렉트</strong>이므로 MySQL과는 다음과 같은 차이가 있습니다.</p>
+
+    <h2 id="dml-diff">DML</h2>
+    <table>
+      <thead><tr><th>주제</th><th>MySQL</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>UPDATE/DELETE</td><td>모든 테이블</td><td>Primary Key 테이블에서 일반적으로 가능. 다른 모델은 파티션 단위 변경.</td></tr>
+        <tr><td>트랜잭션</td><td>BEGIN/COMMIT/ROLLBACK</td><td>적재 단위(Stream/Routine Load 등)에 트랜잭션 — 다중 문장 트랜잭션은 미지원</td></tr>
+        <tr><td>INSERT label</td><td>없음</td><td>중복 방지 label 강력 권장</td></tr>
+        <tr><td>FK / CHECK / UNIQUE</td><td>지원</td><td>제약 미강제 (모델 자체로 충돌 방지)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="ddl-diff">DDL</h2>
+    <ul>
+      <li>테이블 생성 시 <strong>PRIMARY KEY / DUPLICATE KEY / AGGREGATE KEY / UNIQUE KEY</strong> 모델을 명시.</li>
+      <li>파티션·버킷팅·복제본을 거의 항상 함께 정의.</li>
+      <li>인덱스 종류가 BITMAP / BLOOM / N-GRAM 등 다양 — MySQL B-Tree 인덱스와 의미가 다름.</li>
+      <li>스토어드 프로시저는 매우 제한적/없음.</li>
+    </ul>
+
+    <h2 id="types">데이터 타입</h2>
+    <table>
+      <thead><tr><th>타입</th><th>MySQL과 차이</th></tr></thead>
+      <tbody>
+        <tr><td>VARCHAR</td><td>최대 1MB까지. 길이 제한 표기 가능.</td></tr>
+        <tr><td>TEXT / STRING</td><td>STRING은 사실상 매우 큰 VARCHAR.</td></tr>
+        <tr><td>JSON</td><td>네이티브 JSON 타입 + 풍부한 함수.</td></tr>
+        <tr><td>BITMAP / HLL</td><td>StarRocks 고유 — UV 분석에 핵심.</td></tr>
+        <tr><td>ARRAY / MAP / STRUCT</td><td>네이티브 지원.</td></tr>
+        <tr><td>ENUM / SET</td><td>없음 — TINYINT/VARCHAR로 대체.</td></tr>
+        <tr><td>DECIMAL</td><td>지원. precision/scale 명시.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="syntax">자주 다른 문법</h2>
+<pre><code>-- 1) IFNULL/COALESCE 모두 OK. 단 NULL 비교는 =/!= 대신 IS NULL.
+
+-- 2) UPSERT는 INSERT ON DUPLICATE KEY UPDATE 가 아니라
+--    Stream Load + PK 테이블 (자동 UPSERT) 또는
+--    Primary Key UPDATE 문.
+
+-- 3) LIMIT OFFSET은 OK. 큰 OFFSET은 비싸 — 키 기반 페이지네이션 권장.
+SELECT * FROM t WHERE id &gt; ? ORDER BY id LIMIT 100;
+
+-- 4) GROUP BY: SELECT 절 컬럼이 GROUP BY에 모두 있어야 함 (sql_mode='ONLY_FULL_GROUP_BY')
+
+-- 5) 형변환은 CAST 또는 ::TYPE
+SELECT '123'::INT, CAST('123' AS INT);
+
+-- 6) 백틱 식별자 가능: `my-col`
+-- 7) 더블쿼터는 문자열이 아니라 식별자(표준 SQL). 기본 sql_mode 설정 확인.</code></pre>
+
+    <h2 id="query-vars">쿼리 변수 / SET</h2>
+<pre><code>SET parallel_fragment_exec_instance_num = 8;
+SET enable_materialized_view_rewrite = true;
+SET query_mem_limit = 32 * 1024 * 1024 * 1024;
+
+-- 글로벌
+SET GLOBAL ...;
+-- 자기 자신만
+SET SESSION ...;
+
+-- 모두 보기
+SHOW VARIABLES LIKE '%mv%';</code></pre>
+
+    <h2 id="auth">인증·권한</h2>
+    <ul>
+      <li>MySQL 사용자처럼 보이지만, RBAC가 더 강력하고 catalog/database/table 단위 GRANT가 다양.</li>
+      <li><code>GRANT ALL ON *.*</code> 같은 권한은 너무 광범위 — 가능한 한 좁게.</li>
+      <li>LDAP/Kerberos 통합 가능 (<a href="../11-security.html">5-4 보안</a>).</li>
+    </ul>
+
+    <h2 id="tools">도구 호환</h2>
+    <ul>
+      <li><strong>OK</strong>: MySQL CLI, JDBC, Python <code>mysql-connector</code>, DBeaver, Tableau, Superset, Metabase, Redash, dbt(어댑터).</li>
+      <li><strong>주의</strong>: MySQL specific 함수(예: 일부 stored procedure, 트리거)나 트랜잭션 가정.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>분석가 onboarding 자료에 본 페이지를 첫 장으로. "MySQL과 거의 같지만 이 5가지는 다르다"만 알려줘도 사고 방지에 큰 효과.</li>
+        <li>운영 ETL이 INSERT ON DUPLICATE KEY 같은 MySQL 패턴에 의존했다면, Stream Load + PK 테이블 패턴으로 표준화.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./json.html">← SQL-7. JSON</a>
+        <a href="../mv/01-rewrite-conditions.html">다음 → 7-1. MV Rewrite</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/reference/" target="_blank" rel="noopener">docs.starrocks.io / Reference</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

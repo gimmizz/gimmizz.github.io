@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-2. Iceberg Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-iceberg" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-2. Iceberg</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-2. Iceberg Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks는 Iceberg를 v2.4부터 읽기, v3.x부터 쓰기까지 지원한다.
+      카탈로그 종류가 다양해서(<code>hive</code>, <code>rest</code>, <code>glue</code>, <code>jdbc</code>, <code>hadoop</code>) 환경에 맞게 선택한다.</p>
+    </div>
+
+    <h2 id="catalog-types">카탈로그 종류별 PROPERTIES</h2>
+
+    <h3>HMS 기반</h3>
+<pre><code>CREATE EXTERNAL CATALOG ic_hms
+PROPERTIES (
+  "type"                 = "iceberg",
+  "iceberg.catalog.type" = "hive",
+  "hive.metastore.uris"  = "thrift://hms.example.com:9083"
+);</code></pre>
+
+    <h3>REST Catalog (Tabular, Lakekeeper, Polaris ...)</h3>
+<pre><code>CREATE EXTERNAL CATALOG ic_rest
+PROPERTIES (
+  "type"                       = "iceberg",
+  "iceberg.catalog.type"       = "rest",
+  "iceberg.catalog.uri"        = "https://rest.lakehouse.example.com",
+  "iceberg.catalog.warehouse"  = "s3://warehouse/",
+  "iceberg.catalog.credential" = "&lt;client-id:client-secret&gt;"
+);</code></pre>
+
+    <h3>AWS Glue 기반</h3>
+<pre><code>CREATE EXTERNAL CATALOG ic_glue
+PROPERTIES (
+  "type"                          = "iceberg",
+  "iceberg.catalog.type"          = "glue",
+  "aws.glue.region"               = "ap-northeast-2",
+  "aws.glue.use_instance_profile" = "true"
+);</code></pre>
+
+    <h3>Hadoop / JDBC</h3>
+<pre><code># Hadoop (warehouse 경로 직접)
+"iceberg.catalog.type"      = "hadoop",
+"iceberg.catalog.warehouse" = "hdfs://nn/warehouse"
+
+# JDBC catalog
+"iceberg.catalog.type"      = "jdbc",
+"iceberg.catalog.uri"       = "jdbc:postgresql://pg/icebergcat",
+"iceberg.catalog.jdbc.user" = "iceberg",
+"iceberg.catalog.jdbc.password" = "..."</code></pre>
+
+    <h2 id="features">Iceberg에서 활용 가능한 기능</h2>
+    <ul>
+      <li><strong>Time travel</strong>:
+<pre><code>SELECT * FROM ic_hms.db.tbl FOR VERSION AS OF 8123456789012345678;
+SELECT * FROM ic_hms.db.tbl FOR TIMESTAMP AS OF '2026-05-01 00:00:00';</code></pre>
+      </li>
+      <li><strong>스냅샷·메타 시스템 테이블</strong>: <code>$snapshots</code>, <code>$history</code>, <code>$manifests</code>, <code>$partitions</code>, <code>$files</code>, <code>$refs</code> 등을 SELECT 가능.</li>
+      <li><strong>쓰기 (v3.x)</strong>: <code>INSERT INTO</code>, <code>INSERT OVERWRITE</code>, <code>CREATE TABLE</code>, <code>ALTER TABLE ADD COLUMN</code>, <code>DELETE</code>(일부), 파티션 진화.</li>
+      <li><strong>Equality / Position Delete 파일</strong> 모두 처리.</li>
+      <li><strong>스키마 진화</strong>: 컬럼 추가·이름 변경·타입 위젠. Iceberg가 ID 기반이라 안전.</li>
+    </ul>
+
+    <h2 id="storage">스토리지 인증</h2>
+    <p>Hive Catalog와 동일. <a href="./hive.html#kerberos">Kerberos</a>, S3/MinIO 액세스 키, Glue Instance Profile 등.</p>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>Delete 파일이 많으면 BE 메모리 부담 ↑ — 정기 컴팩션·rewrite_data_files 권장.</li>
+      <li>REST Catalog 사용 시 인증 토큰 만료에 주의.</li>
+      <li>v3.x의 INSERT는 빠르게 발전 중 — 사용 버전 릴리스 노트 확인.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>사내 Iceberg가 HMS 기반이라면 <code>iceberg.catalog.type=hive</code>로 시작 — Hive Catalog와 코드 패턴이 거의 같아서 운영 부담이 적음.</li>
+        <li>S3/MinIO 위에 Iceberg를 새로 도입한다면 REST 카탈로그(Lakekeeper, Polaris) 검토 — 다중 엔진 공유에 유리.</li>
+        <li>Time Travel 권한은 별도 역할로 한정 — 잘못된 시점 조회로 분석이 오염되는 사고 방지.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./hive.html">← 6-1. Hive</a>
+        <a href="./hudi.html">다음 → 6-3. Hudi</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/iceberg/iceberg_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Iceberg catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

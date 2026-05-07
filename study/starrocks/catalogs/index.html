@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>6. 카탈로그 개요 — StarRocks 한글 정리</title>
+  <title>6. 카탈로그 개요 — StarRocks 가이드</title>
   <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
@@ -24,6 +24,20 @@
       외부 시스템(Hive, Iceberg, MySQL...)을 같은 SQL 안에서 다룰 수 있게 해 준다.
       v3.2부터는 데이터 레이크 카탈로그들을 통합한 <strong>Unified Catalog</strong>도 가능.</p>
     </div>
+
+<div class="mermaid">
+graph LR
+  SR["StarRocks SQL"]
+  SR --> DC["default_catalog<br/>(내부 OLAP 테이블)"]
+  SR --> H["Hive Catalog"]
+  SR --> I["Iceberg / Hudi / Delta"]
+  SR --> J["JDBC Catalog"]
+  SR --> P["Paimon / ES / Kudu / ..."]
+  H --> HMS["HMS / Glue"] --> S3["HDFS · S3 · OSS · MinIO"]
+  I --> RC["REST/HMS/Glue"] --> S3
+  J --> RDB["MySQL · PG · Oracle · ClickHouse"]
+</div>
+<p class="diagram-caption">그림 6-1. 한 StarRocks 인스턴스에서 다수 카탈로그 결합 SQL</p>
 
     <h2 id="why">6.1 카탈로그 개념</h2>
     <p>

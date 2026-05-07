@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYS-2. 스토리지 포맷 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-storage" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 시스템 내부 / SYS-2. 스토리지 포맷</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SYS-2. 스토리지 포맷 (Segment v2)</h1>
+
+    <h2 id="hierarchy">계층 구조</h2>
+<div class="mermaid">
+graph TD
+  T["Tablet"]
+  T --> RS["RowSet (cumulative or base)"]
+  RS --> SEG["Segment 파일 (.dat)"]
+  SEG --> CB["Column Block"]
+  CB --> PG["Page (encoded + compressed)"]</div>
+
+    <h2 id="segment">Segment 파일</h2>
+    <p>한 Segment는 컬럼 단위 데이터를 담은 바이너리 파일. 다음 메타가 함께 저장된다.</p>
+    <ul>
+      <li><strong>Footer</strong> — 스키마, 컬럼 메타, 인덱스 위치.</li>
+      <li><strong>Zone Map</strong> — 페이지 단위 min/max/null 통계.</li>
+      <li><strong>Bitmap / Bloom Filter / N-Gram</strong> 인덱스 (사용자 지정 시).</li>
+      <li><strong>Short Key Index</strong> — 정렬키 prefix.</li>
+    </ul>
+
+    <h2 id="encoding">Encoding</h2>
+    <table>
+      <thead><tr><th>인코딩</th><th>적용</th></tr></thead>
+      <tbody>
+        <tr><td>BIT_SHUFFLE</td><td>정수/실수의 칼럼 단위 비트 셔플 — 압축률 향상</td></tr>
+        <tr><td>RLE</td><td>반복값 (예: 같은 status 연속)</td></tr>
+        <tr><td>DICTIONARY</td><td>저카디널리티 STRING — id로 변환</td></tr>
+        <tr><td>PLAIN</td><td>일반 저장</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="compress">Compression</h2>
+    <p>Encoding 후 페이지 단위 압축. 코덱은 LZ4(기본) / ZSTD / SNAPPY / ZLIB.</p>
+    <table>
+      <thead><tr><th>코덱</th><th>속도</th><th>압축률</th><th>권장</th></tr></thead>
+      <tbody>
+        <tr><td>LZ4</td><td>가장 빠름</td><td>중간</td><td>핫 테이블 기본</td></tr>
+        <tr><td>ZSTD</td><td>빠름</td><td>높음</td><td>대용량 콜드 / 로그</td></tr>
+        <tr><td>SNAPPY</td><td>빠름</td><td>중간</td><td>—</td></tr>
+        <tr><td>ZLIB</td><td>느림</td><td>높음</td><td>레거시</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="lcache">Low-Cardinality 최적화</h2>
+    <p>저카디널리티 STRING은 자동으로 사전(Dictionary) 인코딩 + 정수 비교로 동작. <code>cbo_enable_low_cardinality_optimize=true</code>이면 GROUP BY/ORDER BY가 정수 처리로 매우 빨라짐.</p>
+
+    <h2 id="page-cache">Page Cache</h2>
+    <p>BE는 디스크에서 읽은 페이지를 메모리에 캐시. 같은 페이지가 다음 쿼리에서도 재사용. <code>storage_page_cache_limit</code>로 크기 제어.</p>
+
+    <h2 id="prune">필터 가지치기 흐름</h2>
+    <ol>
+      <li>Partition 가지치기 — 파티션 키 WHERE</li>
+      <li>Tablet 가지치기 — 분배 키 WHERE</li>
+      <li>Segment Footer의 컬럼 통계 — 전체 segment 제외 가능</li>
+      <li>Page-level Zone Map / Bloom — 페이지 제외</li>
+      <li>Bitmap/Inverted/N-Gram — row 단위 ID set 좁힘</li>
+      <li>실제 페이지 디코딩 + 술어 평가</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>저카디널리티 STRING(상태/카테고리)은 가능한 한 STRING 그대로 둬도 SR이 dictionary 처리 — INT로 굳이 변환 안 해도 됨.</li>
+        <li>정렬키 첫 컬럼은 가장 자주 가지치기되는 컬럼으로. 36바이트 제한.</li>
+        <li><code>storage_page_cache_limit</code>은 약 20~30%가 일반적. 256GB BE에서 50~75GB.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./compaction.html">← SYS-1</a>
+        <a href="./memtracker.html">다음 → SYS-3. MemTracker</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

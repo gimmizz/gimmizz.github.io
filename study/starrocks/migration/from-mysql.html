@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MIG-1. MySQL → StarRocks — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mig-mysql" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 마이그레이션 / MIG-1. MySQL → SR</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>MIG-1. MySQL → StarRocks</h1>
+
+    <h2 id="goal">의도</h2>
+    <p>분석성 워크로드만 SR로 옮기고, 트랜잭션 OLTP는 MySQL에 그대로 두는 게 일반적. SR로 이전하는 것은 "보고서/대시보드/로그 분석"이지 OLTP 본체가 아님.</p>
+
+    <h2 id="schema">스키마 변환 가이드</h2>
+    <table>
+      <thead><tr><th>MySQL</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>InnoDB 테이블 (PK 갱신)</td><td>Primary Key 테이블</td></tr>
+        <tr><td>InnoDB Append-only 로그</td><td>Duplicate Key + 일자 파티션</td></tr>
+        <tr><td>VARCHAR(N)</td><td>VARCHAR(N) 또는 STRING</td></tr>
+        <tr><td>TEXT/MEDIUMTEXT</td><td>STRING</td></tr>
+        <tr><td>JSON</td><td>JSON</td></tr>
+        <tr><td>ENUM/SET</td><td>VARCHAR + CHECK 대체 없음 (애플리케이션에서 검증)</td></tr>
+        <tr><td>FK / UNIQUE / CHECK</td><td>강제되지 않음</td></tr>
+        <tr><td>AUTO_INCREMENT</td><td>SR도 AUTO_INCREMENT 컬럼 지원(v3.x)</td></tr>
+        <tr><td>BLOB</td><td>가급적 분리 — 객체 스토리지에 두고 ID만</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="opts">두 가지 이전 옵션</h2>
+
+    <h3>A. JDBC Catalog로 "보고만"</h3>
+    <p>이전 부담이 가장 작음. MySQL 그대로 두고 SR이 카탈로그처럼 읽음.</p>
+<pre><code>CREATE EXTERNAL CATALOG mysql_app
+PROPERTIES ("type"="jdbc",
+            "user"="sr_reader","password"="...",
+            "jdbc_uri"="jdbc:mysql://mysql:3306",
+            "driver_url"="file:///opt/sr/drivers/mysql-connector-j-8.4.0.jar",
+            "driver_class"="com.mysql.cj.jdbc.Driver");
+
+-- 자주 쓰는 결합은 Async MV로 캐시
+CREATE MATERIALIZED VIEW mv_user_d ...
+AS SELECT ... FROM mysql_app.app.users JOIN ...;</code></pre>
+
+    <h3>B. CDC로 SR 내부 마트로 옮기기</h3>
+    <p>실시간 분석/고동시성이 필요할 때.</p>
+<pre><code>-- Flink CDC + StarRocks Connector (PK 테이블 자동 UPSERT)
+CREATE TABLE src (...) WITH ('connector'='mysql-cdc', ...);
+CREATE TABLE snk (...) WITH ('connector'='starrocks', ...);
+INSERT INTO snk SELECT * FROM src;</code></pre>
+
+    <h2 id="initial">초기 백필</h2>
+<pre><code>-- A. JDBC Catalog로 한 번 INSERT
+INSERT INTO default_catalog.mart.orders
+SELECT * FROM mysql_app.app.orders;
+
+-- B. mysqldump → CSV → Stream Load 또는 INSERT FROM FILES()
+SELECT count(*) FROM FILES("path"="hdfs://nn/dump/orders/*.csv","format"="csv");</code></pre>
+
+    <h2 id="sql-diff">SQL 변환 체크리스트</h2>
+    <ul>
+      <li><code>ON DUPLICATE KEY UPDATE</code> → PK 테이블의 자동 UPSERT 또는 <code>UPDATE</code>.</li>
+      <li>저장 프로시저/트리거 → 애플리케이션 또는 ETL 스케줄러.</li>
+      <li>큰 OFFSET 페이지네이션 → 키 기반 페이지네이션.</li>
+      <li>FOR UPDATE / 잠금 SELECT → 분석 워크로드에서는 일반 SELECT로.</li>
+      <li>VIEW의 SQL 호환성 점검 — 함수 시그니처 일부 차이.</li>
+    </ul>
+
+    <h2 id="cutover">컷오버 전략</h2>
+    <ol>
+      <li>SR 클러스터 + JDBC Catalog 등록 → 분석가 일부 트래픽 이동(Read-only).</li>
+      <li>핫한 테이블 SR 내부로 적재 (CDC 또는 일배치) → 응답 비교.</li>
+      <li>BI 대시보드의 데이터 소스를 SR로 전환.</li>
+      <li>MySQL 분석 트래픽 모니터링 — 0이 되면 분석용 권한 회수.</li>
+      <li>OLTP 본체는 MySQL에 그대로 둔다.</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>MySQL의 무거운 GROUP BY 대시보드는 SR이 가장 큰 가치를 발휘하는 지점.</li>
+        <li>이전 단계에서 데이터 일관성 검증을 위해 동일 SQL을 양쪽에서 돌려 결과 diff 검사 — 자동화 권장.</li>
+        <li>파티션 키와 분배 키를 신중히 선택 — 처음 잘못 잡으면 재구축 비용 큼.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../internals/tablet-replica.html">← SYS-4</a>
+        <a href="./from-clickhouse.html">다음 → MIG-2. ClickHouse</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

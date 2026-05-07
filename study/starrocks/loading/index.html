@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L. 데이터 적재 개요 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-index" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / L. 개요</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>L. 데이터 적재 개요</h1>
+
+    <h2 id="overview">방법 한눈에</h2>
+<div class="mermaid">
+graph TD
+  CSV["CSV / JSON 파일"]
+  KAFKA["Kafka"]
+  HDFS["HDFS / S3 대용량"]
+  CDC["Flink CDC / Debezium"]
+  RDB["MySQL / PG (외부)"]
+  CSV --> SL["Stream Load (HTTP)"]
+  KAFKA --> RL["Routine Load"]
+  HDFS --> BL["Broker Load"]
+  HDFS --> FILES["INSERT + FILES()"]
+  CDC --> SL
+  CDC --> FCONN["Flink Connector"]
+  RDB --> JDBC["JDBC Catalog<br/>+ INSERT INTO ... SELECT"]
+  SL --> SR["StarRocks Table"]
+  RL --> SR
+  BL --> SR
+  FILES --> SR
+  FCONN --> SR
+  JDBC --> SR
+</div>
+
+    <h2 id="choose">선택 가이드</h2>
+    <table>
+      <thead><tr><th>상황</th><th>방법</th><th>한 페이지</th></tr></thead>
+      <tbody>
+        <tr><td>로컬 CSV/JSON 파일을 즉시</td><td>Stream Load (HTTP)</td><td><a href="./stream-load.html">L-1</a></td></tr>
+        <tr><td>Kafka 토픽에서 지속 적재</td><td>Routine Load</td><td><a href="./routine-load.html">L-2</a></td></tr>
+        <tr><td>HDFS/S3 대용량 일괄</td><td>Broker Load 또는 INSERT FILES()</td><td><a href="./broker-load.html">L-3</a> / <a href="./insert-files.html">L-4</a></td></tr>
+        <tr><td>외부 RDB → 정기 적재</td><td>JDBC Catalog + INSERT</td><td><a href="../catalogs/jdbc-mysql.html">6-6</a></td></tr>
+        <tr><td>Flink/Spark</td><td>StarRocks Connector</td><td>(외부 라이브러리)</td></tr>
+        <tr><td>External 카탈로그 → 내부 마트</td><td>INSERT INTO ... SELECT</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="model">트랜잭션 모델</h2>
+    <ul>
+      <li>적재 작업은 <strong>label 기반</strong> — 같은 label은 한 번만 성공한다(at-most-once).</li>
+      <li>Stream Load 한 호출 = 하나의 트랜잭션. 부분 성공/실패 없음.</li>
+      <li>Routine Load는 내부에서 batch 단위로 트랜잭션을 끊어 처리.</li>
+      <li><strong>Primary Key 테이블</strong>은 적재 시 자동 UPSERT/DELETE 처리.</li>
+    </ul>
+
+    <h2 id="check">적재 상태 확인</h2>
+<pre><code>SHOW LOAD WHERE STATE != 'FINISHED';
+SHOW LOAD WHERE LABEL = 'my_label_2026_05_07';
+SHOW ROUTINE LOAD;
+SHOW STREAM LOAD WHERE STATE = 'FAILED';</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>적재가 BE 메모리/디스크에 부담을 주므로 <strong>Resource Group으로 ETL을 분리</strong> (BI와 격리).</li>
+        <li>대용량 백필은 한 번에 하지 말고 파티션 단위로 나누어 진행 — 실패 재시도가 쉬워짐.</li>
+        <li>label은 <code>{table}_{date}_{seq}</code> 형식 추천 — 충돌 방지 + 추적 용이.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../11-security.html">← 5-4. 보안</a>
+        <a href="./stream-load.html">다음 → L-1. Stream Load</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Loading_intro/" target="_blank" rel="noopener">docs.starrocks.io / Loading</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

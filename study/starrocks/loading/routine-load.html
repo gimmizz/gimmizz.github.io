@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L-2. Routine Load — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-routine" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / L-2. Routine Load</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>L-2. Routine Load (Kafka)</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks가 직접 Kafka 토픽을 구독하고 micro-batch 단위로 자동 적재. CDC/이벤트 스트림 표준 적재 방식.</p>
+    </div>
+
+    <h2 id="basic">잡 생성 (CSV)</h2>
+<pre><code>CREATE ROUTINE LOAD mart.events_kafka ON events
+COLUMNS (event_time, user_id, event_type, payload)
+PROPERTIES (
+  "format" = "CSV",
+  "column_separator" = ",",
+  "max_batch_interval" = "10",      -- 초
+  "max_batch_rows"     = "200000",
+  "max_batch_size"     = "104857600", -- 100MB
+  "max_error_number"   = "10000"
+)
+FROM KAFKA (
+  "kafka_broker_list"  = "kafka1:9092,kafka2:9092",
+  "kafka_topic"        = "events_v1",
+  "kafka_partitions"   = "0,1,2,3",
+  "kafka_offsets"      = "OFFSET_BEGINNING,OFFSET_BEGINNING,OFFSET_BEGINNING,OFFSET_BEGINNING"
+);</code></pre>
+
+    <h2 id="json">JSON 적재 (CDC 형식 일반적)</h2>
+<pre><code>CREATE ROUTINE LOAD mart.orders_cdc ON orders
+COLUMNS (order_id, user_id, status, amount, updated_at)
+PROPERTIES (
+  "format" = "JSON",
+  "jsonpaths" = "[\"$.id\",\"$.user_id\",\"$.status\",\"$.amount\",\"$.updated_at\"]",
+  "max_batch_interval" = "5",
+  "max_batch_rows"     = "100000"
+)
+FROM KAFKA (
+  "kafka_broker_list" = "kafka:9092",
+  "kafka_topic"       = "cdc.orders"
+);</code></pre>
+
+    <h2 id="ops">운영 SQL</h2>
+<pre><code>SHOW ROUTINE LOAD\G
+SHOW ROUTINE LOAD FOR mart.events_kafka\G
+
+-- 일시 정지 / 재개 / 종료
+PAUSE  ROUTINE LOAD FOR mart.events_kafka;
+RESUME ROUTINE LOAD FOR mart.events_kafka;
+STOP   ROUTINE LOAD FOR mart.events_kafka;
+
+-- 옵션 변경 (PAUSE 상태에서)
+ALTER ROUTINE LOAD mart.events_kafka
+PROPERTIES ("max_batch_rows" = "300000");</code></pre>
+
+    <h2 id="auth">Kafka SASL/SSL 인증</h2>
+<pre><code>FROM KAFKA (
+  "kafka_broker_list" = "kafka:9093",
+  "kafka_topic"       = "topic_name",
+  "property.security.protocol" = "SASL_SSL",
+  "property.sasl.mechanism"    = "SCRAM-SHA-256",
+  "property.sasl.username"     = "starrocks",
+  "property.sasl.password"     = "..."
+)</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 17 BE 환경에서 한 잡의 파티션 수는 BE 수와 비슷하거나 그 배수일 때 안정적.</li>
+        <li>잡이 PAUSED로 멈춰 있는지 알람 필수 — 무한히 처리 안 되는 일이 잦음.</li>
+        <li>Primary Key 테이블에 적재하면 자동 UPSERT/DELETE — CDC 적재 표준 패턴.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./stream-load.html">← L-1. Stream</a>
+        <a href="./broker-load.html">다음 → L-3. Broker</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/RoutineLoad/" target="_blank" rel="noopener">docs.starrocks.io / Routine Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

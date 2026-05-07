@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>INT-2. dbt — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-dbt" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 외부 도구 / INT-2. dbt</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>INT-2. dbt-starrocks 어댑터</h1>
+
+    <p>dbt에서 StarRocks를 타깃 DB로 사용. 공식 어댑터 <code>dbt-starrocks</code> (PyPI) 또는 GitHub <code>StarRocks/dbt-starrocks</code>.</p>
+
+    <h2 id="install">설치</h2>
+<pre><code>pip install dbt-core dbt-starrocks</code></pre>
+
+    <h2 id="profile">profiles.yml</h2>
+<pre><code>my_project:
+  target: dev
+  outputs:
+    dev:
+      type: starrocks
+      host: fe1.example.com
+      port: 9030
+      schema: mart            # database 이름
+      username: dbt_user
+      password: "{{ env_var('SR_PASSWORD') }}"
+      catalog: default_catalog
+      threads: 8
+      keepalives_idle: 0
+      retries: 1
+    prod:
+      type: starrocks
+      host: lb.example.com
+      port: 9030
+      schema: mart
+      username: dbt_user
+      password: "{{ env_var('SR_PASSWORD_PROD') }}"
+      catalog: default_catalog
+      threads: 16</code></pre>
+
+    <h2 id="materialization">지원 머티리얼라이제이션</h2>
+    <table>
+      <thead><tr><th>dbt</th><th>SR 매핑</th></tr></thead>
+      <tbody>
+        <tr><td><code>view</code></td><td>VIEW</td></tr>
+        <tr><td><code>table</code></td><td>일반 테이블 (CTAS)</td></tr>
+        <tr><td><code>incremental</code></td><td>PRIMARY KEY 테이블 + INSERT/UPSERT</td></tr>
+        <tr><td><code>materialized_view</code></td><td>Async MV</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="model-table">model 예 — table</h2>
+<pre><code>-- models/mart/orders_daily.sql
+{{ config(
+    materialized='table',
+    properties={
+      'replication_num': '3',
+      'compression': 'ZSTD'
+    },
+    partition_by=["dt"],
+    distributed_by=["user_id"],
+    unique_key='order_id'
+) }}
+
+SELECT
+  date_trunc('day', updated_at) AS dt,
+  order_id, user_id, status, amount
+FROM {{ source('cdc', 'orders_raw') }}</code></pre>
+
+    <h2 id="model-incremental">model 예 — incremental (PK)</h2>
+<pre><code>{{ config(
+    materialized='incremental',
+    unique_key='order_id',
+    table_type='primary_key',
+    distributed_by=["order_id"]
+) }}
+
+SELECT *
+FROM {{ source('cdc', 'orders_raw') }}
+{% if is_incremental() %}
+WHERE updated_at &gt; (SELECT max(updated_at) FROM {{ this }})
+{% endif %}</code></pre>
+
+    <h2 id="model-mv">model 예 — Materialized View</h2>
+<pre><code>{{ config(
+    materialized='materialized_view',
+    refresh_method='ASYNC',
+    refresh_schedule="EVERY (INTERVAL 1 HOUR)",
+    partition_by=["dt"],
+    distributed_by=["user_id"]
+) }}
+
+SELECT date_trunc('day', updated_at) AS dt,
+       user_id, count(*) cnt, sum(amount) amt
+FROM {{ ref('orders_daily') }}
+GROUP BY 1, 2</code></pre>
+
+    <h2 id="run">실행</h2>
+<pre><code>dbt run -s mart.orders_daily
+dbt test
+dbt docs generate &amp;&amp; dbt docs serve</code></pre>
+
+    <h2 id="external">External Catalog 모델</h2>
+    <p><code>schema</code>를 <code>hive_prod.dwh</code>처럼 <em>catalog.database</em> 형태로 두면 외부 카탈로그를 타깃으로 빌드할 수 있다(어댑터 버전에 따라 동작 다름 — 확인 후 사용).</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><code>dbt_user</code> 전용 계정에 <strong>USAGE/SELECT/INSERT/CREATE</strong>만 부여. DROP DATABASE 권한은 위험.</li>
+        <li>incremental 모델은 PK 테이블로 운영. 백필은 <code>--full-refresh</code>를 신중히.</li>
+        <li>dbt run을 Airflow/Dagster로 묶으면 다음 페이지(<a href="./dagster-dbt.html">INT-3</a>) 패턴.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./bi-tools.html">← INT-1. BI</a>
+        <a href="./dagster-dbt.html">다음 → INT-3. Dagster + dbt</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://github.com/StarRocks/dbt-starrocks" target="_blank" rel="noopener">github.com/StarRocks/dbt-starrocks</a>,
+          <a href="https://docs.starrocks.io/docs/integrations/" target="_blank" rel="noopener">docs.starrocks.io / Integrations</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

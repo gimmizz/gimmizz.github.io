@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-4. 문자열 함수 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-string" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / 문자열</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-4. 문자열 함수</h1>
+
+    <h2 id="basic">기본</h2>
+    <table>
+      <thead><tr><th>함수</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td><code>LENGTH(s)</code> / <code>CHAR_LENGTH(s)</code></td><td>바이트 / 문자 길이</td></tr>
+        <tr><td><code>UPPER(s)</code> / <code>LOWER(s)</code></td><td>대문자/소문자</td></tr>
+        <tr><td><code>TRIM/LTRIM/RTRIM(s)</code></td><td>양쪽/왼쪽/오른쪽 공백 제거</td></tr>
+        <tr><td><code>CONCAT(a, b, ...)</code></td><td>이어붙이기</td></tr>
+        <tr><td><code>CONCAT_WS(sep, a, b, ...)</code></td><td>구분자 사용</td></tr>
+        <tr><td><code>REPLACE(s, from, to)</code></td><td>치환</td></tr>
+        <tr><td><code>REVERSE(s)</code></td><td>뒤집기</td></tr>
+        <tr><td><code>SUBSTR(s, start[, len])</code> / <code>SUBSTRING</code></td><td>부분 문자열 (start는 1부터)</td></tr>
+        <tr><td><code>LEFT(s, n)</code> / <code>RIGHT(s, n)</code></td><td>앞/뒤 n자</td></tr>
+        <tr><td><code>LPAD/RPAD(s, len, pad)</code></td><td>패딩</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="search">검색</h2>
+<pre><code>SELECT INSTR('hello world', 'world');     -- 7 (1-base, 0이면 없음)
+SELECT POSITION('w' IN 'hello world');
+SELECT LOCATE('w', 'hello world');
+SELECT 'hello world' LIKE '%world';
+SELECT 'hello world' LIKE 'h_llo%';</code></pre>
+
+    <h2 id="regex">정규식</h2>
+<pre><code>SELECT REGEXP_LIKE(col, '^[A-Z]+$');
+SELECT col REGEXP '^[0-9]+$';
+SELECT REGEXP_REPLACE(col, '\\s+', ' ');
+SELECT REGEXP_EXTRACT(url, '/user/([0-9]+)/', 1);  -- 그룹 1
+SELECT REGEXP_EXTRACT_ALL('a1b2c3', '[a-z]([0-9])', 1);  -- ['1','2','3']</code></pre>
+
+    <h2 id="split">분할 / 결합</h2>
+<pre><code>SELECT SPLIT('a,b,c', ',');               -- ['a','b','c']
+SELECT SPLIT_PART('a,b,c', ',', 2);       -- 'b' (1-base)
+SELECT ARRAY_JOIN(ARRAY['a','b','c'], '-'); -- 'a-b-c'</code></pre>
+
+    <h2 id="json-string">JSON 추출 (간이)</h2>
+<pre><code>SELECT GET_JSON_STRING(payload, '$.user.id');
+SELECT GET_JSON_INT   (payload, '$.amount');
+SELECT GET_JSON_DOUBLE(payload, '$.price');
+-- 본격적인 JSON 처리는 SQL-7. JSON 페이지 참조</code></pre>
+
+    <h2 id="encode">인코딩</h2>
+<pre><code>SELECT TO_BASE64('hello');
+SELECT FROM_BASE64('aGVsbG8=');
+SELECT URL_ENCODE('a b/c?d=1');
+SELECT URL_DECODE('a%20b');
+SELECT MD5(s);
+SELECT SHA2(s, 256);
+SELECT HEX(123);  -- '7B'</code></pre>
+
+    <h2 id="cast-num">문자열 ↔ 숫자</h2>
+<pre><code>SELECT CAST('123' AS BIGINT);
+SELECT CAST('1.5' AS DOUBLE);
+SELECT FORMAT(12345.678, 2);  -- '12,345.68'
+SELECT NULLIF(s, '');         -- 빈 문자열을 NULL로</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><code>LIKE '%foo%'</code>가 잦은 컬럼은 N-Gram Bloom 인덱스(<a href="../03c-indexes.html#ngram">3-2</a>) 추가 검토.</li>
+        <li>운영 로그/메시지 분석에서 정규식이 무겁게 도는 경우, ETL 단계에서 미리 split/extract해 컬럼화하는 게 SR 부하를 크게 줄임.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./functions-date.html">← SQL-3. 날짜</a>
+        <a href="./functions-agg-window.html">다음 → SQL-5. 집계·윈도</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/string-functions/" target="_blank" rel="noopener">docs.starrocks.io / String functions</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

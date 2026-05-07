@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PAT-2. 로그 분석 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="pat-log" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 사용 사례 / PAT-2. 로그 분석</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>PAT-2. 로그 분석 패턴</h1>
+
+    <h2 id="goal">목표</h2>
+    <p>Append-only 이벤트 로그(서비스 액세스 로그, 모바일 이벤트, 광고 노출)를 적재해 일/주/월 단위 임시 분석과 정기 보고를 한 클러스터에서 처리.</p>
+
+    <h2 id="schema">스키마 — Duplicate + 일자 파티션</h2>
+<pre><code>CREATE TABLE mart.event_log (
+  event_time DATETIME NOT NULL,
+  user_id    BIGINT,
+  device     VARCHAR(32),
+  event_type VARCHAR(32),
+  url        VARCHAR(1024),
+  payload    JSON
+)
+DUPLICATE KEY(event_time, user_id)
+PARTITION BY date_trunc('day', event_time)
+DISTRIBUTED BY RANDOM
+PROPERTIES (
+  "replication_num" = "3",
+  "compression"     = "ZSTD",
+  "dynamic_partition.enable" = "true",
+  "dynamic_partition.time_unit" = "DAY",
+  "dynamic_partition.start" = "-180",
+  "dynamic_partition.end"   = "3",
+  "bloom_filter_columns" = "user_id, event_type"
+);
+
+-- 일자별 UV (BITMAP 정확) 사전 집계
+CREATE TABLE mart.event_uv_d (
+  log_date  DATE NOT NULL,
+  device    VARCHAR(32) NOT NULL,
+  uv        BITMAP BITMAP_UNION
+)
+AGGREGATE KEY(log_date, device)
+DISTRIBUTED BY HASH(device);
+
+INSERT INTO mart.event_uv_d
+SELECT date_trunc('day', event_time), device, to_bitmap(user_id)
+FROM mart.event_log;</code></pre>
+
+    <h2 id="ingest">적재</h2>
+    <p>대표적 4가지:</p>
+    <ul>
+      <li><strong>Routine Load (Kafka)</strong> — 서비스 직접 흘려보내기.</li>
+      <li><strong>Stream Load</strong> — 분 단위 로테이션 파일을 ETL이 푸시.</li>
+      <li><strong>INSERT INTO ... SELECT FROM hive_prod.dwh.events</strong> — 이미 Hive에 적재되는 환경.</li>
+      <li><strong>FILES()</strong> — 단발성 백필.</li>
+    </ul>
+
+    <h2 id="queries">자주 쓰는 분석 쿼리</h2>
+<pre><code>-- 일자별 PV / UV
+SELECT date_trunc('day', event_time) dt,
+       count(*) AS pv,
+       approx_count_distinct(user_id) AS uv_approx
+FROM mart.event_log
+WHERE event_time &gt;= now() - INTERVAL 7 DAY
+GROUP BY 1 ORDER BY 1;
+
+-- 정확 UV (Bitmap 사용)
+SELECT log_date, bitmap_count(bitmap_union(uv)) AS uv
+FROM mart.event_uv_d WHERE log_date BETWEEN '2026-05-01' AND '2026-05-07'
+GROUP BY 1 ORDER BY 1;
+
+-- 디바이스 코호트 (어제 사용 ∩ 오늘 사용)
+SELECT bitmap_count(
+  bitmap_and(
+    (SELECT bitmap_union(uv) FROM mart.event_uv_d WHERE log_date='2026-05-06'),
+    (SELECT bitmap_union(uv) FROM mart.event_uv_d WHERE log_date='2026-05-07')
+  )
+);
+
+-- 인기 URL Top 100
+SELECT url, count(*) cnt
+FROM mart.event_log
+WHERE event_time &gt;= now() - INTERVAL 1 DAY
+GROUP BY url ORDER BY cnt DESC LIMIT 100;</code></pre>
+
+    <h2 id="mv">자주 쓰는 결과를 MV로 가속</h2>
+<pre><code>CREATE MATERIALIZED VIEW mv_event_pv_d
+PARTITION BY dt DISTRIBUTED BY HASH(event_type)
+REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+AS
+SELECT date_trunc('day', event_time) dt, event_type, device, count(*) pv
+FROM mart.event_log GROUP BY 1, 2, 3;</code></pre>
+
+    <h2 id="ttl">보존 정책</h2>
+    <ul>
+      <li>raw <code>event_log</code>는 90~180일 (dynamic_partition).</li>
+      <li>일자 집계 (PV/UV 등)는 1~3년 보관 — 부피가 작음.</li>
+      <li>대용량 raw가 부담이면 90일 이후는 Hive로 export 후 SR에서 DROP.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>로그는 RANDOM 분배 + ZSTD 압축이 디스크 효율 최고. JOIN이 거의 없으니 colocate는 불필요.</li>
+        <li>Bitmap UV는 user_id가 정수일 때만 진가 — 적재 단계에서 정수 ID로 변환하는 사전 정비.</li>
+        <li>광고/모바일 환경이라면 PAT-4(광고 분석)을 함께 참고.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./realtime-dashboard.html">← PAT-1</a>
+        <a href="./lakehouse.html">다음 → PAT-3. Lakehouse</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

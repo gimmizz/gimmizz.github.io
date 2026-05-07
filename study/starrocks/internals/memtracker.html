@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SYS-3. MemTracker — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="int-mem" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 시스템 내부 / SYS-3. MemTracker</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SYS-3. MemTracker — BE 메모리 추적</h1>
+
+    <p>BE는 메모리 사용을 <strong>계층적 MemTracker</strong>로 추적한다. OOM 방지·디버깅의 출발점.</p>
+
+    <h2 id="hierarchy">계층</h2>
+<div class="mermaid">
+graph TD
+  PROC["process<br/>= mem_limit"]
+  PROC --> Q["query 풀"]
+  PROC --> L["load 풀"]
+  PROC --> C["compaction"]
+  PROC --> S["storage page cache"]
+  PROC --> DC["data cache"]
+  PROC --> PK["pk index"]
+  PROC --> META["metadata 등"]
+  Q --> Q1["query #1"]
+  Q --> Q2["query #2 (각 fragment 별 child tracker)"]</div>
+
+    <h2 id="check">상태 확인</h2>
+<pre><code>-- BE 메모리 풀별 사용량
+SELECT BackendId, IP, MemUsedPct, AvailMemBytes
+FROM information_schema.backends;
+
+-- 더 자세히 — BE Web UI
+http://&lt;be&gt;:8040/mem_tracker
+
+-- HTTP API
+curl http://be1:8040/api/memory/info | jq</code></pre>
+
+    <h2 id="behavior">메모리 한도 도달 시 동작</h2>
+    <ol>
+      <li>각 쿼리 child tracker는 <code>query_mem_limit</code> 까지만 허용.</li>
+      <li>한 쿼리가 한도를 넘으면 그 쿼리만 <strong>Mem limit exceeded</strong>로 실패.</li>
+      <li>process 전체가 <code>mem_limit</code>에 가까워지면 spill 또는 새 쿼리 거부.</li>
+      <li>OOM Killer까지 가면 BE 자체가 종료 — 절대 피해야 함.</li>
+    </ol>
+
+    <h2 id="spill">Disk Spill (v3.x)</h2>
+    <p>큰 쿼리가 메모리를 초과할 때 일부 연산자(Sort, Hash Aggregate, Hash Join)는 디스크로 spill 가능.</p>
+<pre><code>SET enable_spill = true;
+SET spill_storage_limit = '50G';</code></pre>
+    <p>OLTP-like 응답성 SLA가 중요한 환경에선 spill을 끄고 차라리 fail-fast하는 게 나을 수 있음.</p>
+
+    <h2 id="tune">튜닝 권장</h2>
+    <table>
+      <thead><tr><th>파라미터</th><th>의미</th><th>권장</th></tr></thead>
+      <tbody>
+        <tr><td><code>mem_limit</code></td><td>BE 전체 한도</td><td>OS의 80%</td></tr>
+        <tr><td><code>query_mem_limit</code> (세션)</td><td>한 쿼리 메모리 한도</td><td>32~64GB</td></tr>
+        <tr><td><code>load_mem_limit</code></td><td>적재 잡 메모리 한도</td><td>적재 패턴 따라</td></tr>
+        <tr><td><code>storage_page_cache_limit</code></td><td>페이지 캐시</td><td>20~30%</td></tr>
+        <tr><td><code>compaction_mem_limit</code></td><td>컴팩션</td><td>10%</td></tr>
+        <tr><td><code>datacache_mem_size</code></td><td>외부 카탈로그 캐시 메모리부</td><td>5~10%</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="oom-debug">OOM 발생 시</h2>
+    <ol>
+      <li><code>be.WARNING</code> / OS dmesg에서 OOM 이벤트 확인.</li>
+      <li>메모리 풀별 사용량을 BE Web UI에서 추출 — 어디가 폭증했는지.</li>
+      <li>큰 쿼리가 원인이면 <code>query_mem_limit</code>로 fail-fast하도록.</li>
+      <li>적재 폭주가 원인이면 batch 크기/주기 조정.</li>
+      <li>Page Cache가 너무 크면 <code>storage_page_cache_limit</code> 낮춤.</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>256GB BE의 표준 분배: query 100GB, page cache 50GB, data cache 30GB, compaction 20GB, 기타 20GB, OS 36GB.</li>
+        <li>큰 ad-hoc 쿼리를 막으려면 사용자별 <code>query_mem_limit</code>을 Resource Group에서 차등 부여.</li>
+        <li>Spill은 분석 워크벤치에서만 ON, BI/대시보드는 OFF로 fail-fast — SLA 안정성에 도움.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./storage-format.html">← SYS-2</a>
+        <a href="./tablet-replica.html">다음 → SYS-4. Tablet 복제</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/resource_management/memory_management/" target="_blank" rel="noopener">docs.starrocks.io / Memory management</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

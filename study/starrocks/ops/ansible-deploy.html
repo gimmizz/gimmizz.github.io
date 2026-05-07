@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPS-1. Ansible 배포 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-ansible" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / OPS-1. Ansible</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>OPS-1. Ansible로 약 20대 PM 자동 배포</h1>
+
+    <h2 id="inv">inventory.ini</h2>
+<pre><code>[fe]
+fe1 ansible_host=10.0.0.11
+fe2 ansible_host=10.0.0.12
+fe3 ansible_host=10.0.0.13
+
+[be]
+be01 ansible_host=10.0.0.21
+be02 ansible_host=10.0.0.22
+... (be17 까지)
+
+[sr:children]
+fe
+be
+
+[sr:vars]
+sr_version=4.1.0
+sr_pkg_url=https://releases.starrocks.io/starrocks/StarRocks-{{ sr_version }}-amd64.tar.gz
+sr_install_dir=/opt/StarRocks-{{ sr_version }}
+sr_data_root=/data/sr</code></pre>
+
+    <h2 id="play">playbook 메인</h2>
+<pre><code># site.yml
+- hosts: sr
+  become: true
+  roles: [common]
+
+- hosts: fe
+  become: true
+  roles: [fe]
+
+- hosts: be
+  become: true
+  roles: [be]
+
+- hosts: fe[0]
+  become: true
+  tasks:
+    - name: bootstrap leader and add followers/be
+      include_tasks: roles/bootstrap/tasks/main.yml</code></pre>
+
+    <h2 id="common">role: common</h2>
+<pre><code># roles/common/tasks/main.yml
+- name: install JDK 17
+  package: name=java-17-openjdk-headless state=present
+
+- name: kernel sysctl
+  copy: dest=/etc/sysctl.d/99-starrocks.conf content=|
+        vm.swappiness=0
+        vm.overcommit_memory=1
+        vm.max_map_count=262144
+  notify: sysctl reload
+
+- name: ulimit
+  copy: dest=/etc/security/limits.d/99-starrocks.conf content=|
+        sr  soft  nofile 65535
+        sr  hard  nofile 65535
+        sr  soft  nproc  65535
+        sr  hard  nproc  65535
+
+- name: disable THP
+  shell: echo never &gt; /sys/kernel/mm/transparent_hugepage/enabled
+
+- name: create user sr
+  user: name=sr shell=/bin/bash createhome=yes
+
+- name: download SR
+  get_url: url={{ sr_pkg_url }} dest=/tmp/sr.tar.gz
+
+- name: unpack
+  unarchive: src=/tmp/sr.tar.gz dest=/opt copy=no creates={{ sr_install_dir }}
+
+- name: chown
+  file: path={{ sr_install_dir }} owner=sr group=sr recurse=yes</code></pre>
+
+    <h2 id="fe-role">role: fe</h2>
+<pre><code># roles/fe/tasks/main.yml
+- name: prepare fe meta dir
+  file: path={{ sr_data_root }}/fe/meta state=directory owner=sr group=sr mode=0755
+
+- name: render fe.conf
+  template: src=fe.conf.j2 dest={{ sr_install_dir }}/fe/conf/fe.conf owner=sr
+
+- name: systemd unit
+  template: src=starrocks-fe.service.j2 dest=/etc/systemd/system/starrocks-fe.service
+
+- name: start &amp; enable
+  systemd: name=starrocks-fe enabled=yes state=started daemon_reload=yes</code></pre>
+
+    <p><strong>fe.conf.j2</strong>:</p>
+<pre><code>meta_dir = {{ sr_data_root }}/fe/meta
+priority_networks = {{ ansible_default_ipv4.address }}/32
+http_port = 8030
+rpc_port  = 9020
+query_port = 9030
+edit_log_port = 9010</code></pre>
+
+    <h2 id="be-role">role: be</h2>
+<pre><code># roles/be/tasks/main.yml
+- name: prepare 8 disk dirs
+  file: path={{ sr_data_root }}/disk{{ item }} state=directory owner=sr group=sr
+  loop: [1,2,3,4,5,6,7,8]
+
+- name: render be.conf
+  template: src=be.conf.j2 dest={{ sr_install_dir }}/be/conf/be.conf owner=sr
+
+- name: systemd unit
+  template: src=starrocks-be.service.j2 dest=/etc/systemd/system/starrocks-be.service
+
+- name: start &amp; enable
+  systemd: name=starrocks-be enabled=yes state=started daemon_reload=yes</code></pre>
+
+    <p><strong>be.conf.j2</strong>:</p>
+<pre><code>priority_networks = {{ ansible_default_ipv4.address }}/32
+storage_root_path = {{ sr_data_root }}/disk1,medium:SSD;{{ sr_data_root }}/disk2,medium:SSD;{{ sr_data_root }}/disk3,medium:SSD;{{ sr_data_root }}/disk4,medium:SSD;{{ sr_data_root }}/disk5,medium:SSD;{{ sr_data_root }}/disk6,medium:SSD;{{ sr_data_root }}/disk7,medium:SSD;{{ sr_data_root }}/disk8,medium:SSD
+mem_limit = 80%
+datacache_enable = true
+datacache_disk_path = {{ sr_data_root }}/cache
+datacache_disk_size = "300G"</code></pre>
+
+    <h2 id="bootstrap">role: bootstrap (Leader 한 번만)</h2>
+<pre><code># roles/bootstrap/tasks/main.yml — leader fe1에서만 실행
+- name: wait fe1 ready
+  wait_for: host={{ inventory_hostname }} port=9030 delay=10 timeout=120
+
+- name: add followers
+  shell: |
+    mysql -h fe1 -P 9030 -u root -e "
+      ALTER SYSTEM ADD FOLLOWER 'fe2:9010';
+      ALTER SYSTEM ADD FOLLOWER 'fe3:9010';
+    "
+
+- name: add backends
+  shell: |
+    mysql -h fe1 -P 9030 -u root -e "
+      {% for be in groups['be'] %}
+      ALTER SYSTEM ADD BACKEND '{{ hostvars[be].ansible_host }}:9050';
+      {% endfor %}
+    "
+
+- name: set root password
+  shell: |
+    mysql -h fe1 -P 9030 -u root -e "SET PASSWORD FOR 'root' = PASSWORD('{{ root_pwd }}');"</code></pre>
+
+    <h2 id="run">실행</h2>
+<pre><code>ansible-playbook -i inventory.ini site.yml --extra-vars "root_pwd=$ROOT_PWD"</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>위 코드는 <strong>샘플 템플릿</strong>입니다. systemd unit, ulimit, NTP 등 사내 표준에 맞게 조정.</li>
+        <li>비밀번호/keytab은 Ansible Vault에 보관 — 평문 저장 금지.</li>
+        <li>약 20대 환경에서는 위 site.yml이 30분 내 완주. 디스크 마운트(<code>/data/sr/disk1..8</code>) 사전 작업이 OS 이미징 단계에 포함되어야 안정적.</li>
+        <li>업그레이드 playbook은 별도(<a href="./upgrade-runbook.html">OPS-3</a>)로 분리.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../11-security.html">← 5-4. 보안</a>
+        <a href="./healthcheck-sql.html">다음 → OPS-2. 헬스체크</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/deployment/deployment_overview/" target="_blank" rel="noopener">docs.starrocks.io / Deployment</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

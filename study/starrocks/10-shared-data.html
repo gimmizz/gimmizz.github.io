@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>5-3. Shared-Data 모드 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="shared-data" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 5-3. Shared-Data</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>5-3. Shared-Data 모드 — 스토리지·컴퓨트 분리</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>데이터는 객체 스토리지(S3/MinIO/HDFS)에 두고, <strong>CN(Compute Node)</strong>은 stateless하게 캐시만 보관.
+      탄력적 확장과 비용 절감이 가능. 약 20대 PM 환경은 우선 Shared-nothing이 자연스럽지만, 향후 검토 가치가 있음.</p>
+    </div>
+
+    <h2 id="topology">토폴로지</h2>
+<div class="mermaid">
+graph TD
+  C["Client"]
+  C --> FE["FE 3대 (메타 + 옵티마이저)"]
+  FE --> CN1["CN 1<br/>Local Cache"]
+  FE --> CN2["CN 2<br/>Local Cache"]
+  FE --> CN3["CN N<br/>Local Cache"]
+  CN1 --> OBJ["객체 스토리지<br/>S3 / MinIO / OSS / HDFS"]
+  CN2 --> OBJ
+  CN3 --> OBJ
+</div>
+<p class="diagram-caption">그림 5-3-1. Shared-Data 클러스터 구성</p>
+
+    <h2 id="enable">Storage Volume 등록</h2>
+<pre><code>-- S3 호환
+CREATE STORAGE VOLUME def
+TYPE = S3
+LOCATIONS = ('s3://sr-warehouse/')
+PROPERTIES (
+  "enabled" = "true",
+  "aws.s3.endpoint" = "https://minio.internal:9000",
+  "aws.s3.access_key" = "...",
+  "aws.s3.secret_key" = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);
+
+SET def AS DEFAULT STORAGE VOLUME;
+
+-- 테이블이 자동으로 객체 스토리지에 저장됨
+CREATE TABLE mart.orders (...) ;</code></pre>
+
+    <h2 id="cache">캐시 설정</h2>
+<pre><code># cn.conf
+storage_root_path  = /data/sr/cache    -- 로컬 캐시
+datacache_disk_size = "400G"
+storage_page_cache_limit = 30%</code></pre>
+    <p>핫 데이터는 로컬 SSD 캐시에서 직접 스캔, 콜드 데이터는 원격에서 가져오며 동시에 캐시에 채움.</p>
+
+    <h2 id="properties">테이블에서 명시적으로 사용</h2>
+<pre><code>CREATE TABLE mart.events (
+  ...
+)
+DUPLICATE KEY(...)
+PARTITION BY ...
+DISTRIBUTED BY ...
+PROPERTIES (
+  "datacache.enable" = "true",
+  "datacache.partition_duration" = "30 day",  -- 최근 30일 파티션을 캐시
+  "storage_volume" = "def"
+);</code></pre>
+
+    <h2 id="vs">Shared-Nothing vs Shared-Data 선택 기준</h2>
+    <table>
+      <thead><tr><th>상황</th><th>권장</th></tr></thead>
+      <tbody>
+        <tr><td>저지연·고동시성 BI, 안정 데이터셋</td><td>Shared-Nothing</td></tr>
+        <tr><td>탄력적 컴퓨팅(낮/밤 다른 부하)</td><td>Shared-Data</td></tr>
+        <tr><td>다수 클러스터가 같은 데이터 공유</td><td>Shared-Data</td></tr>
+        <tr><td>SSD 비용 부담 / 보관기간 길다</td><td>Shared-Data</td></tr>
+        <tr><td>온프레 + 적은 노드 수</td><td>Shared-Nothing</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 우리 환경에서의 도입 시점</div>
+      <ul>
+        <li>지금은 SSD 약 65TB(원본)이 충분히 크므로 <strong>Shared-Nothing이 단순·빠름</strong>.</li>
+        <li>다음 조건이 누적되면 Shared-Data 검토:
+          <ul>
+            <li>사내 안정적인 S3 호환 객체 스토리지(MinIO 등)가 정착</li>
+            <li>"보관 기간 1년+ 데이터" 비중이 50% 넘어감</li>
+            <li>야간/낮 컴퓨팅 부하 차이가 큼 → CN 자동 확장 가치 있음</li>
+            <li>여러 분석 클러스터가 같은 데이터를 보고 싶음</li>
+          </ul>
+        </li>
+        <li>이행 전략: 신규 마트만 별도 Shared-Data 클러스터로 시작 → 안정화 후 점진 이행. 기존 Shared-Nothing은 <em>핫 분석 가속용</em>으로 유지.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./09-monitoring.html">← 5-2. 모니터링</a>
+        <a href="./11-security.html">다음 → 5-4. 보안</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/deployment/shared_data/s3/" target="_blank" rel="noopener">docs.starrocks.io / Shared-data deployment</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

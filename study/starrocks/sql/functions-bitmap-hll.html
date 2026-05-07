@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-6. Bitmap · HLL — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-bitmap" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / Bitmap·HLL</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-6. Bitmap · HLL — 정확 / 근사 UV</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p><strong>Bitmap</strong>은 정수 ID 집합을 압축 저장하는 정확한 distinct 자료구조,
+      <strong>HLL</strong>은 1% 내외 오차의 근사 distinct. Aggregate 테이블 컬럼 타입으로 직접 저장 가능 → "사전 집계된 UV" 패턴의 핵심.</p>
+    </div>
+
+    <h2 id="bitmap-create">Bitmap을 Aggregate 테이블에 저장</h2>
+<pre><code>CREATE TABLE site_uv_d (
+  log_date  DATE NOT NULL,
+  site_id   INT  NOT NULL,
+  uv        BITMAP BITMAP_UNION
+)
+AGGREGATE KEY(log_date, site_id)
+DISTRIBUTED BY HASH(site_id);
+
+-- 적재 (user_id가 BIGINT 같은 정수면 직접)
+INSERT INTO site_uv_d
+SELECT log_date, site_id, to_bitmap(user_id)
+FROM events;
+
+-- 사용
+SELECT log_date, bitmap_count(uv) AS uv_cnt
+FROM site_uv_d WHERE log_date = '2026-05-07'
+GROUP BY log_date;</code></pre>
+
+    <h2 id="bitmap-fns">Bitmap 함수</h2>
+    <table>
+      <thead><tr><th>함수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>to_bitmap(int_col)</code></td><td>정수 → Bitmap (단일 원소)</td></tr>
+        <tr><td><code>bitmap_union(b)</code></td><td>여러 bitmap 합집합 (집계 함수)</td></tr>
+        <tr><td><code>bitmap_count(b)</code></td><td>크기</td></tr>
+        <tr><td><code>bitmap_and(a,b)</code> / <code>bitmap_or</code> / <code>bitmap_xor</code></td><td>교/합/대칭차</td></tr>
+        <tr><td><code>bitmap_andnot(a,b)</code></td><td>차집합 a − b</td></tr>
+        <tr><td><code>bitmap_contains(b, x)</code></td><td>포함 여부</td></tr>
+        <tr><td><code>bitmap_to_string(b)</code></td><td>디버깅용 문자열</td></tr>
+        <tr><td><code>bitmap_from_string(s)</code></td><td>역방향</td></tr>
+        <tr><td><code>bitmap_intersect(b)</code></td><td>여러 bitmap 교집합 (집계)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="non-int">정수가 아닌 ID에 Bitmap을 쓰려면</h2>
+    <p>Bitmap은 정수 기반. UUID·문자열 ID라면 <strong>integer mapping 테이블</strong>을 만들고 적재 시 매핑하거나,
+    <code>bitmap_hash</code> / <code>bitmap_hash64</code>로 해시값을 사용 (충돌은 통계적으로 무시 가능 수준).</p>
+
+    <h2 id="hll-create">HLL — 근사 UV (가볍고 빠름)</h2>
+<pre><code>CREATE TABLE site_uv_hll (
+  log_date  DATE NOT NULL,
+  site_id   INT  NOT NULL,
+  uv        HLL HLL_UNION
+)
+AGGREGATE KEY(log_date, site_id)
+DISTRIBUTED BY HASH(site_id);
+
+INSERT INTO site_uv_hll
+SELECT log_date, site_id, hll_hash(user_id_str)
+FROM events;
+
+SELECT log_date, hll_cardinality(uv)
+FROM site_uv_hll WHERE log_date='2026-05-07' GROUP BY log_date;</code></pre>
+
+    <h2 id="hll-fns">HLL 함수</h2>
+    <table>
+      <thead><tr><th>함수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>hll_hash(any_col)</code></td><td>임의 타입 → HLL (단일)</td></tr>
+        <tr><td><code>hll_union(h)</code></td><td>합집합 (집계)</td></tr>
+        <tr><td><code>hll_cardinality(h)</code></td><td>근사 cardinality</td></tr>
+        <tr><td><code>hll_union_agg(h)</code></td><td><code>cardinality(union(h))</code> 합쳐서 한 번에</td></tr>
+        <tr><td><code>approx_count_distinct(col)</code></td><td>HLL 기반 즉석 근사</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="compare">선택 가이드</h2>
+    <table>
+      <thead><tr><th>상황</th><th>권장</th></tr></thead>
+      <tbody>
+        <tr><td>정수 user_id, 정확 UV 필요, 큰 cardinality</td><td>Bitmap</td></tr>
+        <tr><td>UUID/문자열 ID, 1% 오차 OK</td><td>HLL</td></tr>
+        <tr><td>Cohort 교집합 분석 (어제 + 오늘 사용자 교집합)</td><td>Bitmap (AND 연산)</td></tr>
+        <tr><td>그냥 빠른 distinct 추정</td><td><code>approx_count_distinct</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>광고/사용자 분석에서 <strong>일자별 UV + 누적 UV + 코호트 유지율</strong>은 Bitmap이 가장 강력. user_id를 정수로 통일해두는 사전 정비가 핵심.</li>
+        <li>Aggregate 테이블 + BITMAP_UNION 컬럼을 베이스로, 그 위에 Async MV로 한 번 더 압축하는 패턴이 많이 쓰임.</li>
+        <li>HLL은 256GB BE 메모리 환경에선 거의 부담 없음 — 가벼운 대시보드 UV에 기본 선택지.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./functions-agg-window.html">← SQL-5. 집계·윈도</a>
+        <a href="./json.html">다음 → SQL-7. JSON</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/bitmap-functions/" target="_blank" rel="noopener">/Bitmap functions</a>,
+          <a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/hll/" target="_blank" rel="noopener">/HLL functions</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

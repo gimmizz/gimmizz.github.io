@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-5. 집계·윈도 함수 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-agg" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / 집계·윈도</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-5. 집계 · 윈도 함수</h1>
+
+    <h2 id="agg">집계 함수</h2>
+    <table>
+      <thead><tr><th>함수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>COUNT(*)</code> / <code>COUNT(col)</code></td><td>행 수 / NOT NULL 개수</td></tr>
+        <tr><td><code>COUNT(DISTINCT col)</code></td><td>고유 값 (정확). 매우 큰 카디널리티는 비쌈</td></tr>
+        <tr><td><code>SUM</code> / <code>AVG</code> / <code>MIN</code> / <code>MAX</code></td><td>표준</td></tr>
+        <tr><td><code>STDDEV</code> / <code>VARIANCE</code></td><td>표준편차/분산</td></tr>
+        <tr><td><code>ANY_VALUE(col)</code></td><td>그룹의 임의 한 값</td></tr>
+        <tr><td><code>ARRAY_AGG(col)</code></td><td>배열로 모음</td></tr>
+        <tr><td><code>GROUP_CONCAT(col, sep)</code></td><td>문자열로 이어붙임</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="approx">근사 집계 (대규모)</h2>
+<pre><code>-- 정확 distinct (느림)
+SELECT count(distinct user_id) FROM events;
+
+-- 근사 distinct (HLL, 매우 빠름. 오차 ~1%)
+SELECT approx_count_distinct(user_id) FROM events;
+
+-- 정확 distinct를 사전 집계하려면 BITMAP_UNION을 Aggregate 모델에서.
+-- 자세히는 SQL-6. Bitmap·HLL 페이지 참조.</code></pre>
+
+    <h2 id="percentile">분위수 / 확률</h2>
+<pre><code>SELECT percentile_approx(latency_ms, 0.5)  AS p50,
+       percentile_approx(latency_ms, 0.95) AS p95,
+       percentile_approx(latency_ms, 0.99) AS p99
+FROM logs;
+
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) FROM t; -- 정확</code></pre>
+
+    <h2 id="rollup">ROLLUP / CUBE / GROUPING SETS</h2>
+<pre><code>SELECT dt, country, SUM(amt)
+FROM orders
+GROUP BY ROLLUP (dt, country);
+
+GROUP BY GROUPING SETS ((dt, country), (dt), ());
+
+-- 실제 어느 row인지 표시
+SELECT GROUPING(dt) AS g_dt, GROUPING(country) AS g_co, ...</code></pre>
+
+    <h2 id="window">윈도 함수</h2>
+<pre><code>-- 사용자별 최근 3건의 주문
+SELECT *,
+  ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC) AS rn
+FROM orders
+QUALIFY rn &lt;= 3;
+
+-- 누적 합 / 7일 이동평균
+SELECT dt,
+  SUM(amount) OVER (ORDER BY dt) AS cum_amt,
+  AVG(amount) OVER (ORDER BY dt ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS ma7
+FROM daily;
+
+-- 변화율
+SELECT dt, amount,
+  amount - LAG(amount, 1) OVER (ORDER BY dt) AS delta,
+  amount / NULLIF(LAG(amount, 1) OVER (ORDER BY dt), 0) - 1 AS change_pct
+FROM daily;
+
+-- 분위수
+SELECT *, NTILE(10) OVER (ORDER BY score) AS decile FROM users;</code></pre>
+
+    <h2 id="window-fns">자주 쓰는 윈도 함수 정리</h2>
+    <table>
+      <thead><tr><th>함수</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>ROW_NUMBER()</code></td><td>순번 (동률도 다른 번호)</td></tr>
+        <tr><td><code>RANK() / DENSE_RANK()</code></td><td>동률 처리 차이</td></tr>
+        <tr><td><code>LAG(col, n)</code> / <code>LEAD(col, n)</code></td><td>이전/다음 n번째 값</td></tr>
+        <tr><td><code>FIRST_VALUE / LAST_VALUE</code></td><td>윈도 첫/마지막 값</td></tr>
+        <tr><td><code>NTH_VALUE(col, n)</code></td><td>n번째 값</td></tr>
+        <tr><td><code>NTILE(n)</code></td><td>n분위 분할</td></tr>
+        <tr><td><code>CUME_DIST() / PERCENT_RANK()</code></td><td>누적 확률 / 순위 비율</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="frame">프레임 (ROWS / RANGE)</h2>
+<pre><code>OVER (PARTITION BY x ORDER BY t
+      ROWS BETWEEN 3 PRECEDING AND CURRENT ROW)
+
+OVER (PARTITION BY x ORDER BY t
+      RANGE BETWEEN INTERVAL 7 DAY PRECEDING AND CURRENT ROW)</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>대시보드의 <code>COUNT(DISTINCT user)</code>는 거의 항상 <strong>BITMAP/HLL</strong>로 대체. UV 정확도가 1% 이내면 충분한 경우 HLL이 압도적.</li>
+        <li>윈도 함수 + PARTITION BY가 큰 경우 셔플이 무겁다. PARTITION BY 키와 테이블 분배 키를 일치시키면 BE 내 로컬 윈도로 동작.</li>
+        <li>GROUPING SETS는 큐브 작성에 강력. 단일 쿼리로 여러 차원 집계가 필요한 BI 시나리오에 적합.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./functions-string.html">← SQL-4. 문자열</a>
+        <a href="./functions-bitmap-hll.html">다음 → SQL-6. Bitmap·HLL</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/aggregate-functions/" target="_blank" rel="noopener">docs.starrocks.io / Aggregate &amp; Window functions</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>8. 튜닝 가이드 — StarRocks 한글 정리</title>
+  <title>8. 튜닝 가이드 — StarRocks 가이드</title>
   <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
@@ -22,6 +22,17 @@
       <div class="callout-title">📌 한 줄 요약</div>
       <p>대부분의 튜닝은 (1) BE 메모리 분배, (2) Compaction, (3) MV·Data Cache, (4) 동시성·세션 변수 — 이 4가지에서 끝난다.</p>
     </div>
+
+<div class="mermaid">
+pie title BE 256GB 메모리 분배 예시
+  "Query Pool (실행 중)" : 100
+  "Page Cache" : 50
+  "Data Cache (외부)" : 30
+  "Compaction" : 20
+  "PK Index 등 기타" : 20
+  "OS / 여유" : 36
+</div>
+<p class="diagram-caption">그림 8-1. 약 20대 PM 환경의 BE 메모리 분배 권장 (mem_limit=80%)</p>
 
     <h2 id="be-mem">8.1 BE 메모리 분배</h2>
     <p>BE의 메모리는 다음과 같이 나뉘어 사용됩니다.</p>

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPS-4. 백업 절차서 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-backup" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / OPS-4. 백업</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>OPS-4. 백업 절차서 (Runbook)</h1>
+
+    <h2 id="scope">백업 대상</h2>
+    <ol>
+      <li><strong>FE 메타데이터</strong> (<code>fe/meta</code>) — 사용자/권한/카탈로그/스키마</li>
+      <li><strong>내부 마트 테이블</strong> — BACKUP SNAPSHOT</li>
+      <li><strong>SQL 스크립트(IaC)</strong> — DDL, MV 정의, dbt 프로젝트 (Git에 보관)</li>
+    </ol>
+    <p>외부 카탈로그(Hive/Iceberg/MySQL)의 데이터는 <strong>원천 시스템</strong> 책임 — SR 백업 대상 아님.</p>
+
+    <h2 id="meta">FE 메타 백업 (야간 cron)</h2>
+<pre><code>#!/bin/bash
+# /opt/sr/cron/backup-fe-meta.sh
+DEST=/data/backup/sr-fe-meta
+mkdir -p $DEST
+cd /opt/sr/fe
+tar czf $DEST/fe-meta-$(hostname)-$(date +%F).tgz meta/
+find $DEST -name "fe-meta-*.tgz" -mtime +30 -delete</code></pre>
+    <p>3대 FE 모두에서 실행. Leader 메타가 가장 최신이지만 어느 것이든 복원에 사용 가능.</p>
+
+    <h2 id="snapshot">테이블 스냅샷 백업</h2>
+<pre><code>-- 1) Repository 등록 (한 번만)
+CREATE REPOSITORY backup_hdfs
+WITH BROKER (
+  "username" = "sr",
+  "password" = ""
+)
+ON LOCATION "hdfs://nn/backup/sr/";
+
+-- 2) 매일 야간
+BACKUP SNAPSHOT mart.snap_$(yyyyMMdd)
+TO backup_hdfs
+ON (orders, users, dim_user, mv_orders_d)
+PROPERTIES ("type" = "full");
+
+-- 진행 확인
+SHOW BACKUP FROM mart\G
+
+-- 보존 — 30~90일 경과한 SNAPSHOT은 삭제
+DROP SNAPSHOT mart.snap_20250101 ON backup_hdfs;</code></pre>
+
+    <h2 id="auto-script">자동 백업 스크립트 예</h2>
+<pre><code>#!/usr/bin/env bash
+DAY=$(date +%Y%m%d)
+SR="mysql -h fe1 -P 9030 -u sr_backup -p$SR_PWD -N -B -e"
+
+TABLES=$($SR "SELECT GROUP_CONCAT(TABLE_NAME)
+              FROM information_schema.tables
+              WHERE TABLE_SCHEMA='mart' AND TABLE_TYPE='BASE TABLE'")
+
+$SR "BACKUP SNAPSHOT mart.snap_$DAY TO backup_hdfs
+     ON ($TABLES) PROPERTIES ('type' = 'full');"
+
+# 끝났는지 폴링
+while :; do
+  STATE=$($SR "SHOW BACKUP FROM mart" | awk '$2==\"snap_'$DAY'\"{print $4}')
+  [ "$STATE" = "FINISHED" ] && break
+  [ "$STATE" = "CANCELLED" ] && { echo "BACKUP FAILED"; exit 1; }
+  sleep 30
+done</code></pre>
+
+    <h2 id="restore">복원 절차</h2>
+<pre><code>-- 새 DB 또는 같은 DB로
+CREATE DATABASE mart_restored;
+
+RESTORE SNAPSHOT mart_restored.snap_20260507
+FROM backup_hdfs
+ON (orders, users)
+PROPERTIES (
+  "backup_timestamp" = "2026-05-07-02-30-00",  -- SHOW BACKUP에서 복사
+  "replication_num"  = "3"
+);
+
+-- 진행 확인
+SHOW RESTORE FROM mart_restored\G</code></pre>
+
+    <h2 id="dr">DR 시나리오</h2>
+    <table>
+      <thead><tr><th>장애</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td>BE 1대 디스크 사망</td><td>자동 복구 (3복제) — 새 디스크 또는 새 PM 추가 후 ADD BACKEND</td></tr>
+        <tr><td>FE 1대 다운</td><td>자동 — Leader 재선출, alive 2대로 정상 운영</td></tr>
+        <tr><td>FE 모두 다운 + 메타 손상</td><td>fe-meta 백업 복원 → FE 1대 부트스트랩 → 나머지 합류</td></tr>
+        <tr><td>테이블 실수 DROP</td><td>해당 SNAPSHOT으로 RESTORE</td></tr>
+        <tr><td>전체 클러스터 손실</td><td>새 클러스터 구축 + fe-meta + SNAPSHOT 복원</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="drill">DR 리허설</h2>
+    <p>분기 1회는 다음을 수행:</p>
+    <ul>
+      <li>임시 클러스터에 fe-meta 복원 + 1개 SNAPSHOT RESTORE</li>
+      <li>응답 SQL이 동일한지 비교</li>
+      <li>수행 시간을 측정해 RTO 목표 갱신</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>핵심 마트(<em>금전 관련 / 정산</em>)는 매일 SNAPSHOT, 그 외는 주 단위로 충분.</li>
+        <li>SNAPSHOT 저장소(HDFS/S3)는 <strong>SR 클러스터와 별도 장애 도메인</strong>에 두기 — 같이 죽으면 의미 없음.</li>
+        <li>스키마 변경 직전엔 <code>fe-meta</code>를 추가로 한 번 더 백업.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./upgrade-runbook.html">← OPS-3</a>
+        <a href="../internals/compaction.html">다음 → SYS-1. Compaction</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/Backup_and_restore/" target="_blank" rel="noopener">docs.starrocks.io / Backup and restore</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

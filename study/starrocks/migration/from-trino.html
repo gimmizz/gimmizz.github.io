@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MIG-3. Trino → StarRocks — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mig-trino" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 마이그레이션 / MIG-3. Trino → SR</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>MIG-3. Trino / Presto → StarRocks</h1>
+
+    <h2 id="why">왜 옮기나</h2>
+    <ul>
+      <li>스토리지 + 컴퓨트가 한 엔진 → BI 가속용 자체 마트 가능.</li>
+      <li>Async MV 자동 재작성 → 사용자 코드 변경 없이 가속.</li>
+      <li>Data Cache → 외부 카탈로그가 내부에 가까운 응답 속도.</li>
+      <li>UPSERT/DELETE → PK 모델로 가능 (Trino는 커넥터 의존).</li>
+    </ul>
+
+    <h2 id="catalog">카탈로그 매핑</h2>
+    <table>
+      <thead><tr><th>Trino Catalog/Connector</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>hive</td><td>Hive Catalog</td></tr>
+        <tr><td>iceberg</td><td>Iceberg Catalog (HMS/REST/Glue)</td></tr>
+        <tr><td>hudi</td><td>Hudi Catalog</td></tr>
+        <tr><td>delta-lake</td><td>Delta Catalog</td></tr>
+        <tr><td>mysql/postgresql/oracle/sqlserver</td><td>JDBC Catalog</td></tr>
+        <tr><td>elasticsearch</td><td>Elasticsearch Catalog</td></tr>
+        <tr><td>memory/blackhole</td><td>—</td></tr>
+        <tr><td>jmx/system</td><td>information_schema</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="sql">SQL 다이얼렉트 차이</h2>
+    <ul>
+      <li><code>SELECT * FROM catalog.schema.table</code> 동일 (3단 식별자).</li>
+      <li><code>WITH (table_property = ...)</code> 같은 Trino DDL 옵션 → SR의 PROPERTIES.</li>
+      <li><code>UNNEST(array_col)</code> → SR도 지원.</li>
+      <li><code>GROUP BY GROUPING SETS</code> → 동일.</li>
+      <li><code>WINDOW</code> 절 명명 → SR도 지원.</li>
+      <li><code>VARCHAR</code> 파라미터 길이 → SR은 길이 명시 필요.</li>
+      <li>BIGINT/INTEGER 차이 — SR은 BIGINT 표준.</li>
+    </ul>
+
+    <h2 id="ports">접근 포트 차이</h2>
+    <table>
+      <thead><tr><th>도구</th><th>Trino</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>CLI</td><td>trino://host:8080</td><td>mysql -h host -P 9030</td></tr>
+        <tr><td>JDBC</td><td>jdbc:trino://...</td><td>jdbc:mysql://host:9030</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="strategy">전환 전략</h2>
+    <ol>
+      <li>SR 클러스터 구축 + Trino와 같은 메타스토어/스토리지에 카탈로그 등록.</li>
+      <li>같은 SQL을 양쪽에서 돌려 결과/응답 시간 비교 (자동 회귀 테스트).</li>
+      <li>BI 도구의 데이터 소스를 SR로 전환 (선택 SQL부터 단계적).</li>
+      <li>핫 SQL은 SR에 Async MV로 캐시 → 더 빠른 응답.</li>
+      <li>Trino 트래픽이 줄어들면 클러스터 축소.</li>
+    </ol>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>Trino-only 함수(특정 Geo, ML)가 있으면 SR UDF/UDAF로 포팅 필요.</li>
+      <li>Trino의 Federation은 매우 강력 — SR도 비슷하지만 확장 가능 카탈로그가 다를 수 있어 검증.</li>
+      <li>Trino의 fault-tolerant execution(예: 큰 ETL)을 의존했다면 SR에선 spill + 재시도 전략.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>Trino를 BI 가속에 쓰던 워크로드가 가장 큰 이전 효과. 카탈로그 등록 + Data Cache + Async MV가 표준 셋업.</li>
+        <li>데이터 사이언스가 Trino의 Federation을 SQL로 많이 쓰던 경우, SR Unified Catalog로 동등 이상의 경험 제공 가능.</li>
+        <li>SR로 옮기고도 여전히 ad-hoc large scan이 필요하다면 Trino를 배치 분석에 남겨두고 SR은 BI/대시보드 전용으로 분리하는 하이브리드도 OK.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./from-clickhouse.html">← MIG-2</a>
+        <a href="./from-doris.html">다음 → MIG-4. Doris</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

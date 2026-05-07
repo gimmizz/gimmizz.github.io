@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL-2. DML — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-dml" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL 레퍼런스 / DML</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL-2. DML — INSERT / UPDATE / DELETE</h1>
+
+    <h2 id="insert">INSERT</h2>
+<pre><code>-- VALUES
+INSERT INTO mart.orders VALUES (1, 100, 'paid', 12345.00, NOW());
+
+-- 다중 행
+INSERT INTO mart.orders VALUES
+  (2, 100, 'paid', 5000, NOW()),
+  (3, 101, 'pending', 200, NOW());
+
+-- INSERT INTO ... SELECT (가장 흔함)
+INSERT INTO mart.orders
+SELECT * FROM hive_prod.dwh.orders WHERE dt = '2026-05-07';
+
+-- 외부 카탈로그로도 INSERT (Hive v3.2+, Iceberg v3.x)
+INSERT INTO hive_prod.dwh.summary SELECT ... ;
+
+-- INSERT OVERWRITE (파티션 단위 덮어쓰기)
+INSERT OVERWRITE mart.orders PARTITION (p20260507)
+SELECT * FROM stage.orders WHERE updated_at::date = '2026-05-07';
+
+-- 라벨 (재시도 안전)
+INSERT INTO mart.orders WITH LABEL ord_20260507_001 SELECT ...;</code></pre>
+
+    <h2 id="update">UPDATE (Primary Key 테이블에 한해 직접 가능)</h2>
+<pre><code>UPDATE mart.orders SET status = 'refunded' WHERE order_id = 1;
+
+UPDATE mart.orders
+SET amount = amount * 0.9
+WHERE updated_at &gt;= '2026-05-01' AND status = 'paid';
+
+-- JOIN 조건으로 갱신
+UPDATE mart.orders o
+SET status = 'closed'
+FROM stage.cancel s
+WHERE o.order_id = s.order_id;</code></pre>
+    <p>Duplicate / Aggregate / Unique 모델은 직접 UPDATE 불가. UPSERT/REPLACE 적재로 대신.</p>
+
+    <h2 id="delete">DELETE</h2>
+<pre><code>DELETE FROM mart.orders WHERE updated_at &lt; '2026-01-01';
+
+-- PK 테이블이면 일반 DELETE 가능. 비-PK 테이블은 파티션 단위 권장.
+ALTER TABLE mart.orders DROP PARTITION p20260101;</code></pre>
+
+    <h2 id="cte">CTE / WITH</h2>
+<pre><code>WITH paid AS (
+  SELECT user_id, sum(amount) amt FROM mart.orders WHERE status='paid' GROUP BY user_id
+),
+ranked AS (
+  SELECT user_id, amt, rank() OVER (ORDER BY amt DESC) rk FROM paid
+)
+SELECT * FROM ranked WHERE rk &lt;= 100;</code></pre>
+
+    <h2 id="explain">EXPLAIN / EXPLAIN ANALYZE</h2>
+<pre><code>EXPLAIN  SELECT count(*) FROM mart.orders WHERE updated_at &gt;= '2026-05-07';
+EXPLAIN ANALYZE SELECT ...;
+EXPLAIN ALL SELECT ...;     -- 모든 단계 (parser, analyzer, optimizer)</code></pre>
+
+    <h2 id="show">SHOW · DESCRIBE</h2>
+<pre><code>DESCRIBE mart.orders;
+SHOW CREATE TABLE mart.orders;
+SHOW PARTITIONS FROM mart.orders;
+SHOW INDEX FROM mart.orders;
+SHOW PROCESSLIST;
+SHOW VARIABLES LIKE '%mv%';
+SHOW LOAD WHERE STATE != 'FINISHED';</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>대용량 백필은 <code>INSERT OVERWRITE</code>를 파티션 단위로 끊어 진행. 한 번에 전체 OVERWRITE는 위험.</li>
+        <li>UPDATE/DELETE는 PK 테이블 전용. ETL 업스트림에서 변경 분만 보내고 PK 테이블이 받아주는 패턴이 안전·효율적.</li>
+        <li>Async MV가 있는 베이스 테이블에 큰 DML이 일어나면 MV가 무효화될 수 있음 — 의도적인 큰 변경 후엔 <code>REFRESH MATERIALIZED VIEW</code>를 명시적으로.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./ddl.html">← SQL-1. DDL</a>
+        <a href="./functions-date.html">다음 → SQL-3. 날짜·시간</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-statements/data-manipulation/" target="_blank" rel="noopener">docs.starrocks.io / DML</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

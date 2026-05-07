@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>7-3. MV 리프레시 모드 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mv-trigger" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 쿼리·MV / 7-3. 리프레시 모드</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>7-3. MV 리프레시 모드</h1>
+
+    <h2 id="modes">모드 비교</h2>
+    <table>
+      <thead><tr><th>모드</th><th>의미</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td>ASYNC + EVERY</td><td>주기적 자동 리프레시</td><td><code>REFRESH ASYNC EVERY (INTERVAL 1 HOUR)</code></td></tr>
+        <tr><td>ASYNC (수동)</td><td>외부 트리거</td><td><code>REFRESH MATERIALIZED VIEW mv_x;</code></td></tr>
+        <tr><td>MANUAL</td><td>자동 안 함, 명시적으로만</td><td>스케줄러가 따로 호출</td></tr>
+        <tr><td>INCREMENTAL</td><td>변경된 파티션만</td><td>(파티션 정합 필수)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="async">ASYNC + EVERY (가장 흔한 패턴)</h2>
+<pre><code>CREATE MATERIALIZED VIEW mv_event_d
+PARTITION BY dt DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC
+       START('2026-05-08 02:00:00')
+       EVERY (INTERVAL 1 HOUR)
+PROPERTIES (
+  "partition_refresh_number" = "10",
+  "auto_refresh_partitions_limit" = "30"
+)
+AS SELECT date_trunc('day', event_time) dt, user_id, count(*) cnt
+   FROM events GROUP BY 1, 2;</code></pre>
+
+    <h2 id="manual">MANUAL</h2>
+<pre><code>CREATE MATERIALIZED VIEW mv_x ...
+REFRESH MANUAL
+AS SELECT ...;
+
+-- 외부 스케줄러(예: Airflow, Dagster)가 호출
+REFRESH MATERIALIZED VIEW mv_x;
+REFRESH MATERIALIZED VIEW mv_x PARTITION START('2026-05-07') END('2026-05-08');</code></pre>
+
+    <h2 id="incremental">INCREMENTAL</h2>
+<pre><code>-- 베이스에서 변경된 파티션 단위만 다시 빌드
+REFRESH MATERIALIZED VIEW mv_event_d FORCE;          -- 강제 풀
+REFRESH MATERIALIZED VIEW mv_event_d                 -- 변경 파티션 자동 감지
+        PARTITION START('2026-05-07') END('2026-05-08');</code></pre>
+
+    <h2 id="ops">운영 SQL</h2>
+<pre><code>-- 모든 MV
+SHOW MATERIALIZED VIEWS;
+
+-- 상세
+SHOW MATERIALIZED VIEW mv_event_d\G
+
+-- 리프레시 작업 이력
+SELECT * FROM information_schema.task_runs
+WHERE definition LIKE '%mv_event_d%'
+ORDER BY create_time DESC LIMIT 20;
+
+-- 활성/비활성
+ALTER MATERIALIZED VIEW mv_event_d ACTIVE;
+ALTER MATERIALIZED VIEW mv_event_d INACTIVE;
+
+-- 정의 변경 (자주 쓰지 않음 — 새 MV 만드는 게 더 안전)
+ALTER MATERIALIZED VIEW mv_event_d
+SET ("partition_refresh_number" = "20");
+
+-- 삭제
+DROP MATERIALIZED VIEW mv_event_d;</code></pre>
+
+    <h2 id="trigger">자동 트리거 조건</h2>
+    <ul>
+      <li><strong>EVERY 주기 도래</strong> — 가장 일반.</li>
+      <li><strong>베이스 변경 감지</strong> (Internal 테이블) — Async MV는 베이스 적재 후 다음 주기에 갱신.</li>
+      <li><strong>외부 카탈로그 베이스</strong>는 메타 변경을 감지해야 — <code>force_external_table_query_rewrite</code>·메타 캐시 갱신.</li>
+    </ul>
+
+    <h2 id="schedule">Resource Group으로 리프레시 격리</h2>
+<pre><code>ALTER MATERIALIZED VIEW mv_event_d
+SET ("session.resource_group" = "rg_etl");</code></pre>
+    <p>대용량 MV 리프레시가 BI 트래픽을 잡아먹는 사고를 예방.</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>새벽 2~4시 정기 리프레시 + 시간 단위 incremental 조합이 가장 안정적.</li>
+        <li>외부 트리거가 필요한 경우 MANUAL + Airflow/Dagster — 적재가 끝난 직후 MV refresh를 트리거.</li>
+        <li>실패한 task는 <code>information_schema.task_runs</code>의 <code>state='FAILED'</code>를 모니터링.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./02-partitioning.html">← 7-2. 파티션 정합</a>
+        <a href="./04-troubleshooting.html">다음 → 7-4. MV 트러블슈팅</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/using_starrocks/Materialized_view-single_table/" target="_blank" rel="noopener">docs.starrocks.io / MV</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

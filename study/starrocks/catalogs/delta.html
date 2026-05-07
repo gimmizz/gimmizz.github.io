@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-4. Delta Lake Catalog — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-delta" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-4. Delta</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-4. Delta Lake Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>v2.5부터 Delta Lake 테이블을 직접 SELECT할 수 있다. <code>_delta_log</code>를 직접 읽어 정확한 스냅샷 뷰를 제공.</p>
+    </div>
+
+    <h2 id="basic">기본 PROPERTIES</h2>
+<pre><code>CREATE EXTERNAL CATALOG delta_hms
+PROPERTIES (
+  "type"                = "deltalake",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083",
+  "aws.s3.endpoint"     = "https://minio.internal:9000",
+  "aws.s3.access_key"   = "...",
+  "aws.s3.secret_key"   = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);
+
+-- AWS Glue로 Delta 테이블을 관리하는 경우
+CREATE EXTERNAL CATALOG delta_glue
+PROPERTIES (
+  "type" = "deltalake",
+  "hive.metastore.type" = "glue",
+  "aws.glue.region" = "ap-northeast-2",
+  "aws.glue.use_instance_profile" = "true"
+);</code></pre>
+
+    <h2 id="features">활용 기능</h2>
+    <ul>
+      <li><strong>Time travel</strong>: <code>FOR VERSION AS OF n</code>, <code>FOR TIMESTAMP AS OF '...'</code></li>
+      <li><strong>Deletion Vector</strong>: v3.x에서 단계적 지원. 사용 버전 릴리스 노트 참고.</li>
+      <li><strong>Column Mapping</strong> (id/name): v3.x 지원.</li>
+      <li><strong>스키마 진화</strong>: 컬럼 추가 안전.</li>
+    </ul>
+
+    <h2 id="caveats">주의사항</h2>
+    <ul>
+      <li>StarRocks의 Delta 쓰기는 미지원 — Spark Delta로 적재.</li>
+      <li><code>_delta_log</code>가 손상되면 카탈로그 전체 쿼리 실패 — Delta 측 무결성 보호 정책 필수.</li>
+      <li>큰 체크포인트 파일이 있으면 메타 로딩이 느릴 수 있음 — 파티션이 많은 테이블은 첫 쿼리 워밍업 권장.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>Databricks·Spark Delta 파이프라인이 이미 있는 팀이라면 StarRocks를 BI 가속기로 붙이는 패턴이 자연스러움.</li>
+        <li>Iceberg/Delta가 한 HMS에 섞여 있다면 <a href="./unified.html">Unified Catalog</a>를 먼저 검토.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./hudi.html">← 6-3. Hudi</a>
+        <a href="./unified.html">다음 → 6-5. Unified</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/deltalake_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Delta Lake catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

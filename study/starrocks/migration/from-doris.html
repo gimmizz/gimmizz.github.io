@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MIG-4. Doris → StarRocks — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="mig-doris" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 마이그레이션 / MIG-4. Doris → SR</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>MIG-4. Apache Doris → StarRocks</h1>
+
+    <p>StarRocks와 Apache Doris는 같은 뿌리(Apache Doris fork에서 분기)에서 출발해 SQL/스토리지 포맷이 매우 유사합니다. 그래서 마이그레이션이 가장 쉬운 케이스.</p>
+
+    <h2 id="similar">매우 유사한 부분</h2>
+    <ul>
+      <li>FE/BE 아키텍처, MySQL 프로토콜.</li>
+      <li>Duplicate/Aggregate/Unique/Primary Key 모델.</li>
+      <li>Stream Load / Routine Load / Broker Load.</li>
+      <li>BACKUP/RESTORE 개념.</li>
+      <li>대부분의 SQL 함수.</li>
+    </ul>
+
+    <h2 id="diff">자주 다른 부분</h2>
+    <table>
+      <thead><tr><th>주제</th><th>Doris</th><th>StarRocks</th></tr></thead>
+      <tbody>
+        <tr><td>옵티마이저</td><td>Nereids (신규) + 레거시</td><td>CBO (자체 구현)</td></tr>
+        <tr><td>External Catalog</td><td>지원하나 종류·기능 차이</td><td>Hive/Iceberg/Hudi/Delta/JDBC/ES/Paimon... 풍부</td></tr>
+        <tr><td>Async MV</td><td>지원</td><td>Query Rewrite가 더 강력</td></tr>
+        <tr><td>벡터화 엔진</td><td>지원</td><td>전면 벡터화</td></tr>
+        <tr><td>Pipeline 엔진</td><td>지원</td><td>지원</td></tr>
+        <tr><td>일부 시스템 SQL</td><td>약간 차이</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="schema">스키마 변환</h2>
+    <p>대부분의 CREATE TABLE은 그대로 또는 거의 그대로 동작. 다음만 주의:</p>
+    <ul>
+      <li>일부 PROPERTIES 키 이름 차이 (예: dynamic_partition 옵션).</li>
+      <li>Primary Key 테이블의 <code>enable_persistent_index</code>는 SR 전용.</li>
+      <li>분배: SR은 Auto Bucket이 더 적극적.</li>
+    </ul>
+
+    <h2 id="data">데이터 이전 옵션</h2>
+    <ol>
+      <li><strong>BACKUP/RESTORE</strong>: Doris의 SNAPSHOT을 SR이 직접 복원하는 건 호환성 보장 안 됨 — 권장하지 않음.</li>
+      <li><strong>SELECT INTO OUTFILE → 적재</strong>: parquet/csv로 export 후 SR에서 INSERT FROM FILES().</li>
+      <li><strong>JDBC Catalog로 Doris 직접 SELECT → SR INSERT</strong>: 단발 백필에 가장 편함.</li>
+      <li><strong>Dual write</strong>: 적재 파이프라인을 양쪽에 동시 흘려 안전한 컷오버.</li>
+    </ol>
+<pre><code>-- 옵션 3 예시
+CREATE EXTERNAL CATALOG doris_old
+PROPERTIES ("type"="jdbc",
+            "user"="reader","password"="...",
+            "jdbc_uri"="jdbc:mysql://doris-fe:9030",
+            "driver_url"="file:///opt/sr/drivers/mysql-connector-j-8.4.0.jar",
+            "driver_class"="com.mysql.cj.jdbc.Driver");
+
+INSERT INTO default_catalog.mart.orders
+SELECT * FROM doris_old.mart.orders;</code></pre>
+
+    <h2 id="bi">BI 도구 마이그레이션</h2>
+    <p>Doris도 MySQL 프로토콜이라 BI 도구 설정의 호스트/포트만 바꾸면 그대로 동작. 권한·역할은 RBAC 기반으로 재구성.</p>
+
+    <h2 id="checklist">체크리스트</h2>
+    <ol>
+      <li>SR 클러스터 구축 + 같은 외부 카탈로그 등록.</li>
+      <li>Doris의 DDL을 mysql 클라이언트로 dump → 약간 수정 후 SR에서 실행.</li>
+      <li>JDBC Catalog로 Doris 데이터 INSERT 백필.</li>
+      <li>적재 파이프라인을 SR에도 흘리고 결과 비교.</li>
+      <li>BI 데이터 소스 전환.</li>
+      <li>Doris 적재 중단 → 보관 → 폐기.</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>Doris ↔ SR은 마이그레이션 부담이 가장 작은 케이스. 일반적으로 1~2주에 핵심 마트 이전 가능.</li>
+        <li>이전 후 SR의 추가 가치(다양한 외부 카탈로그, MV Rewrite, Data Cache)를 적극 활용하면 ROI가 극대화.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./from-trino.html">← MIG-3. Trino</a>
+        <a href="../practice/01-docker-quickstart.html">다음 → 실습</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/" target="_blank" rel="noopener">docs.starrocks.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

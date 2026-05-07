@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P-5. 백업·복원 실습 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="practice-backup" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 실습 / P-5. 백업·복원</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>P-5. BACKUP / RESTORE 실습</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 목표</div>
+      <p>S3(MinIO)를 백업 저장소로 등록하고, 테이블 1개를 백업·복원해본다.</p>
+    </div>
+
+    <div class="steps-container">
+      <div class="step">
+        <strong>저장소 등록 (Repository)</strong>
+<pre><code>CREATE REPOSITORY backup_s3
+WITH BROKER (
+  "fs.s3a.access.key" = "minio",
+  "fs.s3a.secret.key" = "minio123",
+  "fs.s3a.endpoint"   = "http://minio:9000",
+  "fs.s3a.path.style.access" = "true"
+)
+ON LOCATION "s3a://warehouse/backup/sr/";
+
+SHOW REPOSITORIES;</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>스냅샷 백업</strong>
+<pre><code>BACKUP SNAPSHOT shop.snap_20260507
+TO backup_s3
+ON (orders)
+PROPERTIES ("type" = "full");
+
+SHOW BACKUP FROM shop\G</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>복원 — 새 DB로</strong>
+<pre><code>CREATE DATABASE shop_restored;
+
+RESTORE SNAPSHOT shop_restored.snap_20260507
+FROM backup_s3
+ON (orders)
+PROPERTIES (
+  "backup_timestamp" = "&lt;위 SHOW BACKUP에서 복사&gt;",
+  "replication_num"  = "1"
+);
+
+SHOW RESTORE FROM shop_restored\G
+
+USE shop_restored;
+SELECT count(*) FROM orders;</code></pre>
+      </div>
+
+      <div class="step">
+        <strong>실패 시나리오</strong>
+        <ul>
+          <li>저장소 권한 부족: <code>SHOW BACKUP</code>의 <code>FailedMsg</code> 확인. MinIO 정책 점검.</li>
+          <li>버전 불일치: 다른 메이저 버전으로 복원하면 일부 메타가 호환 안 될 수 있음.</li>
+          <li>외부 카탈로그 데이터: 백업 대상 아님 — 원천에 책임.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>운영에서는 매일 야간 BACKUP 스케줄 + 30~90일 보관. NAS/HDFS/객체 스토리지 어느 쪽이든 가능.</li>
+        <li>FE 메타 디렉터리(<code>fe/meta</code>)도 함께 tar 백업. BACKUP은 데이터/스키마, fe/meta는 카탈로그·권한 메타까지 포함.</li>
+        <li>분기에 한 번 RESTORE 리허설 — 안 해보면 실제 사고 때 시간이 너무 걸림.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./04-async-mv.html">← P-4. Async MV</a>
+        <a href="../index.html">홈으로</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/Backup_and_restore/" target="_blank" rel="noopener">docs.starrocks.io / Backup and restore</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

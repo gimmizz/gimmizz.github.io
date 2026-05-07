@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>3. 데이터 모델 — StarRocks 한글 정리</title>
+  <title>3. 데이터 모델 — StarRocks 가이드</title>
   <link rel="stylesheet" href="./assets/style.css">
 </head>
 <body>
@@ -25,6 +25,16 @@
       <strong>Primary Key</strong>(실시간 UPSERT)
       두 가지를 가장 많이 쓴다. 모델은 <em>한 번 정하면 변경 불가</em>.</p>
     </div>
+
+<div class="mermaid">
+graph LR
+  IN["입력: (k=1, v=10)<br/>(k=1, v=20)<br/>(k=1, v=30)"]
+  IN --> D["Duplicate<br/>3행 모두 보존"]
+  IN --> A["Aggregate (SUM v)<br/>k=1, v=60"]
+  IN --> U["Unique<br/>k=1, v=30 (최신)"]
+  IN --> P["Primary Key<br/>k=1, v=30 (최신)"]
+</div>
+<p class="diagram-caption">그림 3-1. 같은 키가 들어왔을 때 모델별 결과</p>
 
     <h2 id="why">3.1 왜 4가지나 있나</h2>
     <p>
