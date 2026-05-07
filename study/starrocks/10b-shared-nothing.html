@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>5-3a. Shared-Nothing 모드 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="shared-nothing" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 5-3a. Shared-Nothing</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>5-3a. Shared-Nothing 모드 — 기본 배포 형태</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>각 BE가 <strong>자기 로컬 SSD에 데이터를 들고</strong> 자기 데이터를 직접 처리하는 전통적 MPP 형태.
+      StarRocks의 <strong>기본 배포 모드</strong>이고, 약 20대 PM 환경에서 가장 자연스러운 선택.</p>
+    </div>
+
+    <h2 id="topology">2.토폴로지</h2>
+<div class="mermaid">
+graph TD
+  C["Client (BI / app)"]
+  C --> FE["FE 3대 (메타 + 옵티마이저)"]
+  FE --> BE1["BE 1<br/>local SSD x8<br/>Tablet replica A,B"]
+  FE --> BE2["BE 2<br/>local SSD x8<br/>Tablet replica B,C"]
+  FE --> BE3["BE 3<br/>local SSD x8<br/>Tablet replica C,A"]
+  FE --> BEN["BE N ..."]
+  BE1 <-- "Exchange shuffle" --> BE2
+  BE2 <-- "Exchange shuffle" --> BE3</div>
+<p class="diagram-caption">그림 5-3a-1. Shared-Nothing — 데이터와 컴퓨트가 같은 노드</p>
+
+    <h2 id="principle">핵심 원리</h2>
+    <ol>
+      <li><strong>데이터 로컬리티</strong> — Tablet은 BE의 로컬 SSD에 저장. 그 BE가 자기 Tablet을 직접 스캔.</li>
+      <li><strong>다중 복제</strong> — 한 Tablet의 N개(보통 3) 복제본은 서로 다른 BE에. 단일 BE 다운에서도 쿼리 가능.</li>
+      <li><strong>MPP 분산</strong> — FE가 Fragment를 데이터 보유 BE에 분배. BE는 자기 부분만 빠르게.</li>
+      <li><strong>Exchange로 결합</strong> — 조인/집계 단계에서 BE 간 데이터 셔플(broadcast/hash/bucket).</li>
+    </ol>
+
+    <h2 id="storage-layout">스토리지 레이아웃</h2>
+<pre><code>BE.conf:
+storage_root_path = /data/sr/disk1,medium:SSD;
+                    /data/sr/disk2,medium:SSD;
+                    ... (총 8개)
+
+# BE는 Tablet을 8개 디스크에 라운드로빈으로 분산 배치
+# 각 Tablet = 한 디스크의 한 디렉터리</code></pre>
+<div class="mermaid">
+graph TD
+  T["Table"]
+  T --> P["Partition (예: dt=2026-05-07)"]
+  P --> B1["Bucket 0"]
+  P --> B2["Bucket 1"]
+  P --> B3["Bucket 2"]
+  B1 --> R1A["Replica @ BE1.disk3"]
+  B1 --> R1B["Replica @ BE5.disk1"]
+  B1 --> R1C["Replica @ BE9.disk7"]
+  B2 --> R2A["Replica @ BE2.disk2"]
+  B2 --> R2B["Replica @ BE6.disk5"]
+  B2 --> R2C["Replica @ BE10.disk8"]</div>
+<p class="diagram-caption">그림 5-3a-2. Tablet 복제 3개가 서로 다른 BE의 디스크에 분산</p>
+
+    <h2 id="query">쿼리 처리 흐름</h2>
+<div class="mermaid">
+sequenceDiagram
+  participant C as Client
+  participant FE as FE
+  participant B1 as BE1 (data A,B)
+  participant B2 as BE2 (data B,C)
+  participant B3 as BE3 (data C,A)
+  C->>FE: SELECT ... GROUP BY ...
+  FE->>FE: Plan: scan + partial agg + final agg
+  FE->>B1: Fragment scan(A,B) + partial_agg
+  FE->>B2: Fragment scan(B,C) + partial_agg
+  FE->>B3: Fragment scan(C,A) + partial_agg
+  B1-->>B2: Exchange (hash by key)
+  B3-->>B2: Exchange (hash by key)
+  B2->>FE: final_agg result
+  FE->>C: rows</div>
+
+    <h2 id="strengths">강점</h2>
+    <ul>
+      <li><strong>저지연·고동시성</strong> — 로컬 SSD에서 직접 스캔. 네트워크 IO 최소.</li>
+      <li><strong>단순한 구조</strong> — 외부 의존(객체 스토리지, ZK 등) 없음.</li>
+      <li><strong>강한 데이터 일관성</strong> — Tablet 복제본이 quorum 기반으로 동기화.</li>
+      <li><strong>풍부한 인덱스 효과</strong> — Zone Map, Bitmap, Bloom, N-Gram이 BE 로컬에서 즉시 동작.</li>
+      <li><strong>저장과 컴퓨트가 함께 확장</strong> — BE 1대 추가하면 둘 다 ↑.</li>
+    </ul>
+
+    <h2 id="weaknesses">약점 / 트레이드오프</h2>
+    <ul>
+      <li><strong>스토리지·컴퓨트가 묶여 있음</strong> — 데이터가 더 필요해도 컴퓨트가 같이 늘어남(반대도 동일).</li>
+      <li><strong>BE 추가 시 리밸런스</strong> — Tablet이 새 BE로 이동 → 일시적 부하.</li>
+      <li><strong>SSD 비용</strong> — 모든 데이터가 로컬 SSD에 있어야 → GB당 비용이 객체 스토리지보다 비쌈.</li>
+      <li><strong>장기 보관 비효율</strong> — 콜드 데이터까지 SSD에 두는 건 낭비.</li>
+    </ul>
+
+    <h2 id="ha">고가용성</h2>
+    <table>
+      <thead><tr><th>장애</th><th>영향</th><th>복구</th></tr></thead>
+      <tbody>
+        <tr><td>BE 1대 다운</td><td>해당 Tablet은 다른 2복제본에서 처리. 쿼리는 계속.</td><td>5분 이상 다운이면 자동 클론 시작 → 새 BE/디스크로 복제본 재생성.</td></tr>
+        <tr><td>디스크 1개 사망</td><td>그 디스크 위 Tablet만 영향. BE는 살아있음.</td><td>해당 Tablet은 다른 BE의 복제본에서 클론.</td></tr>
+        <tr><td>BE 다수 동시 다운</td><td>한 Tablet의 모든 복제본이 함께 죽으면 데이터 일시 불가.</td><td>복제본이 살아있는 BE가 살아나면 자동 복구.</td></tr>
+        <tr><td>FE 1대 다운</td><td>Leader 자동 재선출.</td><td>Follower 다수가 살아있어야.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="scaling">확장 패턴</h2>
+    <h3 id="vertical">수직 확장</h3>
+    <ul>
+      <li>같은 BE에 디스크 추가. <code>storage_root_path</code>에 새 경로 추가 후 BE 재기동.</li>
+      <li>가장 빠르게 디스크 부족을 해소.</li>
+      <li>한 BE에 디스크가 너무 많아지면(예: &gt;10TB) 복구가 오래 걸려 위험 — 가이드 참고(<a href="./04b-capacity-planning.html#be-disk">4-1</a>).</li>
+    </ul>
+
+    <h3 id="horizontal">수평 확장</h3>
+    <ul>
+      <li>BE 추가 (<code>ALTER SYSTEM ADD BACKEND ...</code>).</li>
+      <li>FE 스케줄러가 자동으로 일부 Tablet을 새 BE로 이전(리밸런스).</li>
+      <li>야간 작업 권장 — 리밸런스가 IO를 점유.</li>
+    </ul>
+
+    <h2 id="ops">운영 포인트</h2>
+    <ul>
+      <li><strong>BE 디스크 균형</strong>: 디스크별 사용률 편차가 크면 일부가 먼저 가득 참. 정기 점검 필요.</li>
+      <li><strong>Tablet 수</strong>: 한 BE당 Tablet이 너무 많으면 메타 부담. 노드당 100K 이하가 일반적.</li>
+      <li><strong>Compaction</strong>: 적재가 빈번하면 컴팩션 적체. <code>be_compaction_score</code> 모니터링.</li>
+      <li><strong>리밸런스 정지</strong>: 대량 BE 추가 시 <code>disable_balance=true</code>로 잠시 정지.</li>
+    </ul>
+
+    <h2 id="vs">Shared-Data와 비교</h2>
+    <table>
+      <thead><tr><th>항목</th><th>Shared-Nothing</th><th>Shared-Data</th></tr></thead>
+      <tbody>
+        <tr><td>노드</td><td>FE + BE</td><td>FE + CN + 객체 스토리지</td></tr>
+        <tr><td>데이터 위치</td><td>BE 로컬 SSD</td><td>객체 스토리지 (CN은 캐시만)</td></tr>
+        <tr><td>복제</td><td>Tablet 3복제 (애플리케이션 레벨)</td><td>객체 스토리지 내구성에 위임</td></tr>
+        <tr><td>응답 속도</td><td>가장 빠름 (로컬 IO)</td><td>캐시 적중 시 비슷, 미스 시 ↓</td></tr>
+        <tr><td>확장</td><td>BE 추가 = 데이터 리밸런스 동반</td><td>CN 추가/제거 즉시</td></tr>
+        <tr><td>비용</td><td>SSD 사용량에 비례</td><td>객체 스토리지 + 일부 캐시 SSD</td></tr>
+        <tr><td>운영 단순성</td><td>매우 단순</td><td>객체 스토리지 운영 부담 +</td></tr>
+        <tr><td>최적 워크로드</td><td>저지연 BI, 고동시성, 핫 데이터</td><td>탄력적 컴퓨팅, 비용 절감, 데이터 공유</td></tr>
+      </tbody>
+    </table>
+    <p>자세한 Shared-Data 본편: <a href="./10-shared-data.html">5-3. Shared-Data</a>.</p>
+
+    <h2 id="when">언제 Shared-Nothing이 답인가</h2>
+    <ul>
+      <li><strong>온프레 자체 데이터센터</strong> + 안정적 SSD 다수 → 우리 환경.</li>
+      <li>저지연 BI/대시보드, 고동시성.</li>
+      <li>Hive/Iceberg 외부 카탈로그를 함께 쓰면서 자체 마트는 작은 규모.</li>
+      <li>운영 인력이 객체 스토리지를 별도로 키우기 어려운 조직.</li>
+    </ul>
+
+    <h2 id="when-not">언제 Shared-Data를 검토</h2>
+    <ul>
+      <li>보관 기간이 길고 콜드 데이터 비중이 큼.</li>
+      <li>야간/낮 부하 차이가 커서 컴퓨트만 확장하고 싶음.</li>
+      <li>여러 분석 클러스터가 같은 데이터를 공유.</li>
+      <li>이미 사내에 안정적 S3 호환 스토리지가 정착.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 약 20대 PM 환경</div>
+      <ul>
+        <li>SSD 480GB×8 / 노드 = ~3.84TB. 약 17 BE면 raw 65TB → 3복제 환산 약 22TB 가용. <strong>Shared-Nothing이 자연스러운 출발점.</strong></li>
+        <li>FE 3 + BE 17 + Observer 1~2(선택)로 시작. 나중에 BI 트래픽 폭증 시 Observer 추가.</li>
+        <li>BE 1대 추가 시 리밸런스가 30분~2시간 소요(데이터 양 따라). 야간 윈도에서 진행.</li>
+        <li>외부 카탈로그(Hive/Iceberg)를 적극 활용하면 내부 SR 마트가 22TB 안에 충분히 들어감 — 모든 데이터를 내부로 가져가지 말 것.</li>
+        <li>장기 보관 데이터는 Hive/Iceberg에 두고 SR로는 핫 분석만. 향후 Shared-Data로의 이행은 데이터 부피가 50TB+ 넘어갈 때 검토.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./09-monitoring.html">← 5-2. 모니터링</a>
+        <a href="./10-shared-data.html">다음 → 5-3. Shared-Data</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/introduction/Architecture/" target="_blank" rel="noopener">docs / Architecture</a>,
+          <a href="https://www.starrocks.io/blog/starrocks-best-practices-capacity-planning-and-deployment" target="_blank" rel="noopener">blog / Capacity planning</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

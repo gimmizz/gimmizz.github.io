@@ -134,6 +134,148 @@
     })
     .catch((e) => console.warn('Prism load failed:', e));
 
+  // ---------- 사이드바 검색 ----------
+  let searchIndex = null;
+  function ensureSearchIndex() {
+    if (searchIndex) return Promise.resolve(searchIndex);
+    return fetch(base + 'assets/search-index.json')
+      .then((r) => r.json())
+      .then((data) => (searchIndex = data));
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  function highlight(text, qs) {
+    let out = escapeHtml(text);
+    qs.forEach((q) => {
+      if (!q) return;
+      const re = new RegExp('(' + q.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') + ')', 'gi');
+      out = out.replace(re, '<mark>$1</mark>');
+    });
+    return out;
+  }
+
+  function snippet(text, qs, len = 80) {
+    if (!text) return '';
+    const lower = text.toLowerCase();
+    let idx = -1;
+    for (const q of qs) {
+      if (!q) continue;
+      const i = lower.indexOf(q.toLowerCase());
+      if (i >= 0 && (idx < 0 || i < idx)) idx = i;
+    }
+    if (idx < 0) return text.slice(0, len) + (text.length > len ? '…' : '');
+    const start = Math.max(0, idx - 20);
+    const end = Math.min(text.length, idx + 60);
+    return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+  }
+
+  function search(query) {
+    const qs = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    if (!qs.length) return [];
+    const out = [];
+    for (const item of searchIndex) {
+      const titleL = (item.title || '').toLowerCase();
+      const h1L = (item.h1 || '').toLowerCase();
+      const sectionL = (item.section || '').toLowerCase();
+      const textL = (item.text || '').toLowerCase();
+      const headings = item.headings || [];
+
+      let score = 0;
+      let headingHit = null;
+      for (const q of qs) {
+        if (titleL.includes(q)) score += 10;
+        if (h1L.includes(q)) score += 8;
+        if (sectionL.includes(q)) score += 4;
+        for (const h of headings) {
+          if (h.label.toLowerCase().includes(q)) {
+            score += 6;
+            if (!headingHit) headingHit = h;
+          }
+        }
+        if (textL.includes(q)) score += 1;
+      }
+      if (score > 0) out.push({ item, score, headingHit });
+    }
+    out.sort((a, b) => b.score - a.score);
+    return out.slice(0, 20);
+  }
+
+  function renderResults(query, hits, container) {
+    const qs = query.toLowerCase().split(/\s+/).filter(Boolean);
+    container.innerHTML = '';
+    if (!hits.length) {
+      const li = document.createElement('li');
+      li.className = 'search-empty';
+      li.textContent = '결과 없음';
+      container.appendChild(li);
+      return;
+    }
+    for (const h of hits) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      const url = base + h.item.url + (h.headingHit ? '#' + h.headingHit.id : '');
+      a.href = url;
+      const title = h.item.title || h.item.h1 || h.item.url;
+      const sub = h.headingHit ? h.headingHit.label : (h.item.section || '');
+      const snip = snippet(h.item.text, qs);
+      a.innerHTML =
+        '<div class="r-title">' + highlight(title, qs) + '</div>' +
+        (sub ? '<div class="r-sub">' + highlight(sub, qs) + '</div>' : '') +
+        (snip ? '<div class="r-snip">' + highlight(snip, qs) + '</div>' : '');
+      li.appendChild(a);
+      container.appendChild(li);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const setupSearch = () => {
+      const input = document.getElementById('sb-search');
+      const results = document.getElementById('sb-search-results');
+      if (!input || !results) return;
+
+      let timer = null;
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        const q = input.value.trim();
+        if (!q) {
+          results.hidden = true;
+          results.innerHTML = '';
+          return;
+        }
+        timer = setTimeout(() => {
+          ensureSearchIndex().then(() => {
+            const hits = search(q);
+            renderResults(q, hits, results);
+            results.hidden = false;
+          });
+        }, 120);
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          input.value = '';
+          results.hidden = true;
+        }
+      });
+      // 외부 클릭 시 닫기
+      document.addEventListener('click', (e) => {
+        if (!input.contains(e.target) && !results.contains(e.target)) {
+          results.hidden = true;
+        }
+      });
+    };
+    // sidebar fetch 결과로 search input이 들어오므로, 약간 지연 후 셋업.
+    const tryInterval = setInterval(() => {
+      if (document.getElementById('sb-search')) {
+        clearInterval(tryInterval);
+        setupSearch();
+      }
+    }, 50);
+    setTimeout(() => clearInterval(tryInterval), 5000);
+  });
+
   // ---------- Mermaid (구조도/다이어그램) ----------
   loadScript('https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js')
     .then(() => {

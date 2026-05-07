@@ -80,6 +80,82 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   background: rgba(109, 40, 217, 0.35);
 }
 
+/* 사이드바 검색 */
+.sidebar-search {
+  position: relative;
+  margin: 4px 0 16px;
+  padding: 0 4px;
+}
+.sidebar-search input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+  font-size: 13px;
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.sidebar-search input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(109, 40, 217, 0.15);
+}
+.sidebar-search .search-results {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-md);
+}
+.sidebar-search .search-results li {
+  margin: 2px 0;
+}
+.sidebar-search .search-results a {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.sidebar-search .search-results a:hover {
+  background: var(--color-accent-hover);
+  text-decoration: none;
+}
+.sidebar-search .r-title {
+  font-weight: 600;
+  color: var(--color-accent);
+  font-size: 13px;
+}
+.sidebar-search .r-sub {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+.sidebar-search .r-snip {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.sidebar-search mark {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+.sidebar-search .search-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
 .sidebar h1 {
   font-size: 17px;
   font-weight: 700;
