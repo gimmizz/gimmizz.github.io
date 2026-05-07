@@ -17,6 +17,44 @@
   const sidebar = document.querySelector('.sidebar');
   if (!sidebar) return;
 
+  // ---------- 사이드바 접기/펼치기 ----------
+  const layout = document.querySelector('.layout');
+  const COLLAPSE_KEY = 'sr-sb-collapsed';
+
+  function applyCollapsed(collapsed) {
+    if (!layout) return;
+    layout.classList.toggle('sb-collapsed', collapsed);
+    const btn = document.getElementById('sb-toggle');
+    if (btn) {
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.title = collapsed ? '사이드바 펼치기' : '사이드바 접기';
+    }
+  }
+  // 초기 상태 (FOUC 방지를 위해 즉시 적용)
+  applyCollapsed(localStorage.getItem(COLLAPSE_KEY) === '1');
+
+  // 토글 버튼은 스크립트로 동적 생성 (모든 페이지 공통)
+  const toggle = document.createElement('button');
+  toggle.id = 'sb-toggle';
+  toggle.className = 'sidebar-toggle';
+  toggle.type = 'button';
+  toggle.setAttribute('aria-label', '사이드바 토글');
+  toggle.innerHTML = '<span class="sb-icon"></span>';
+  toggle.addEventListener('click', () => {
+    const next = !layout.classList.contains('sb-collapsed');
+    applyCollapsed(next);
+    localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
+  });
+  document.body.appendChild(toggle);
+  // 단축키: [ 로 토글
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === '[') {
+      e.preventDefault();
+      toggle.click();
+    }
+  });
+
   const base = sidebar.dataset.base || './';
   const activeKey = sidebar.dataset.active || '';
   const url = base + 'assets/sidebar.html';

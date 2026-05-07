@@ -78,7 +78,74 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   height: 100vh;
   overflow-y: auto;
   padding: 26px 16px 32px;
+  transition: width 0.22s ease, padding 0.22s ease, opacity 0.22s ease;
 }
+
+/* 접힘 상태 */
+.layout.sb-collapsed .sidebar {
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-right: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+.layout.sb-collapsed .page-toc {
+  display: none;
+}
+
+/* 토글 버튼 — 콘텐츠 좌상단에 떠 있음 */
+.sidebar-toggle {
+  position: fixed;
+  top: 16px;
+  left: calc(var(--sidebar-width) + 8px);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  cursor: pointer;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+  transition: left 0.22s ease, background 0.15s, border-color 0.15s;
+}
+.sidebar-toggle:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+}
+.layout.sb-collapsed ~ .sidebar-toggle {
+  left: 12px;
+}
+.sidebar-toggle .sb-icon {
+  width: 16px;
+  height: 12px;
+  position: relative;
+}
+.sidebar-toggle .sb-icon::before,
+.sidebar-toggle .sb-icon::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--color-text-muted);
+  border-radius: 2px;
+  transition: transform 0.22s ease;
+}
+.sidebar-toggle .sb-icon::before { top: 0; }
+.sidebar-toggle .sb-icon::after { bottom: 0; }
+.sidebar-toggle .sb-icon {
+  border-top: 2px solid var(--color-text-muted);
+  border-bottom: 2px solid var(--color-text-muted);
+}
+.sidebar-toggle .sb-icon::before,
+.sidebar-toggle .sb-icon::after { display: none; }
+.sidebar-toggle:hover .sb-icon { border-color: var(--color-accent); }
+
+/* 접힘 시 토글 버튼은 콘텐츠 위로 살짝 이동 — sibling selector 동작 안 할 때를 위해 별도 룰 */
+body:has(.layout.sb-collapsed) .sidebar-toggle { left: 12px; }
 .sidebar::-webkit-scrollbar { width: 6px; }
 .sidebar::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.12);
@@ -328,10 +395,17 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
 /* Prism theme(prism-tomorrow)와 우리 pre 다크 테마 충돌 보정 */
 .content pre[class*="language-"] {
   background: #0d1117 !important;
+  text-shadow: none !important;
 }
-.content pre[class*="language-"] > code {
+/* Prism의 text-shadow가 다크 배경에서 밑줄처럼 보이는 현상 제거 */
+.content pre,
+.content pre code,
+.content pre[class*="language-"] code,
+.content pre[class*="language-"] .token,
+.content pre .token {
   background: transparent !important;
   text-shadow: none !important;
+  text-decoration: none !important;
 }
 
 /* Mermaid 다이어그램 박스 */
