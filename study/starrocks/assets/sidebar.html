@@ -9,103 +9,105 @@
     <li><a href="{BASE}index.html" data-key="index">시작하기</a></li>
 
     <li class="section-title">기초</li>
-    <li><a href="{BASE}01-introduction.html" data-key="introduction">1. StarRocks 소개</a></li>
-    <li><a href="{BASE}02-architecture.html" data-key="architecture">2. 아키텍처 (FE / BE / CN)</a></li>
-    <li><a href="{BASE}03-data-models.html" data-key="data-models">3. 데이터 모델 (4가지 테이블)</a></li>
+    <li><a href="{BASE}01-introduction.html" data-key="introduction">StarRocks 소개</a></li>
+    <li><a href="{BASE}02-architecture.html" data-key="architecture">아키텍처 (FE / BE / CN)</a></li>
+    <li><a href="{BASE}03-data-models.html" data-key="data-models">데이터 모델 (4가지 테이블)</a></li>
 
-    <li class="section-title">테이블 설계 심화</li>
-    <li><a href="{BASE}03b-partition-bucket.html" data-key="partition">3-1. 파티션 · 버킷팅</a></li>
-    <li><a href="{BASE}03c-indexes.html" data-key="indexes">3-2. 인덱스 종류</a></li>
-    <li><a href="{BASE}03d-properties.html" data-key="properties">3-3. PROPERTIES 레퍼런스</a></li>
-    <li><a href="{BASE}03e-colocate.html" data-key="colocate">3-4. Colocate Group</a></li>
+    <li class="section-title">테이블 설계</li>
+    <li><a href="{BASE}03b-partition-bucket.html" data-key="partition">파티션 · 버킷팅</a></li>
+    <li><a href="{BASE}03c-indexes.html" data-key="indexes">인덱스</a></li>
+    <li><a href="{BASE}03d-properties.html" data-key="properties">PROPERTIES 레퍼런스</a></li>
+    <li><a href="{BASE}03e-colocate.html" data-key="colocate">Colocate Group</a></li>
 
-    <li class="section-title">데이터 적재</li>
-    <li><a href="{BASE}loading/index.html" data-key="loading-index">L. 적재 개요</a></li>
-    <li><a href="{BASE}loading/stream-load.html" data-key="loading-stream">L-1. Stream Load</a></li>
-    <li><a href="{BASE}loading/routine-load.html" data-key="loading-routine">L-2. Routine Load (Kafka)</a></li>
-    <li><a href="{BASE}loading/broker-load.html" data-key="loading-broker">L-3. Broker Load</a></li>
-    <li><a href="{BASE}loading/insert-files.html" data-key="loading-insert">L-4. INSERT · FILES()</a></li>
-
-    <li class="section-title">External Catalog</li>
-    <li><a href="{BASE}catalogs/index.html" data-key="catalogs-index">6. 카탈로그 개요</a></li>
-    <li><a href="{BASE}catalogs/hive.html" data-key="catalog-hive">6-1. Hive</a></li>
-    <li><a href="{BASE}catalogs/iceberg.html" data-key="catalog-iceberg">6-2. Iceberg</a></li>
-    <li><a href="{BASE}catalogs/hudi.html" data-key="catalog-hudi">6-3. Hudi</a></li>
-    <li><a href="{BASE}catalogs/delta.html" data-key="catalog-delta">6-4. Delta Lake</a></li>
-    <li><a href="{BASE}catalogs/unified.html" data-key="catalog-unified">6-5. Unified</a></li>
-    <li><a href="{BASE}catalogs/jdbc-mysql.html" data-key="catalog-jdbc">6-6. JDBC (MySQL/PG/Oracle...)</a></li>
-    <li><a href="{BASE}catalogs/paimon.html" data-key="catalog-paimon">6-7. Paimon</a></li>
-    <li><a href="{BASE}catalogs/elasticsearch.html" data-key="catalog-es">6-8. Elasticsearch</a></li>
-    <li><a href="{BASE}catalogs/kudu.html" data-key="catalog-kudu">6-9. Kudu</a></li>
-    <li><a href="{BASE}catalogs/maxcompute.html" data-key="catalog-maxcompute">6-10. MaxCompute</a></li>
-
-    <li class="section-title">쿼리 · Materialized View</li>
-    <li><a href="{BASE}06-query-mv.html" data-key="query-mv">7. 쿼리 · MV 개요</a></li>
-    <li><a href="{BASE}mv/01-rewrite-conditions.html" data-key="mv-rewrite">7-1. MV Query Rewrite</a></li>
-    <li><a href="{BASE}mv/02-partitioning.html" data-key="mv-partition">7-2. MV 파티션 정합</a></li>
-    <li><a href="{BASE}mv/03-trigger-refresh.html" data-key="mv-trigger">7-3. MV 리프레시 모드</a></li>
-    <li><a href="{BASE}mv/04-troubleshooting.html" data-key="mv-trouble">7-4. MV 트러블슈팅</a></li>
-
-    <li class="section-title">SQL 레퍼런스</li>
-    <li><a href="{BASE}sql/ddl.html" data-key="sql-ddl">SQL-1. DDL</a></li>
-    <li><a href="{BASE}sql/dml.html" data-key="sql-dml">SQL-2. DML</a></li>
-    <li><a href="{BASE}sql/functions-date.html" data-key="sql-date">SQL-3. 날짜·시간 함수</a></li>
-    <li><a href="{BASE}sql/functions-string.html" data-key="sql-string">SQL-4. 문자열 함수</a></li>
-    <li><a href="{BASE}sql/functions-agg-window.html" data-key="sql-agg">SQL-5. 집계·윈도 함수</a></li>
-    <li><a href="{BASE}sql/functions-bitmap-hll.html" data-key="sql-bitmap">SQL-6. Bitmap · HLL</a></li>
-    <li><a href="{BASE}sql/json.html" data-key="sql-json">SQL-7. JSON</a></li>
-    <li><a href="{BASE}sql/mysql-compat.html" data-key="sql-mysql">SQL-8. MySQL 호환성</a></li>
-
-    <li class="section-title">사용 사례별 가이드</li>
-    <li><a href="{BASE}patterns/realtime-dashboard.html" data-key="pat-rt">PAT-1. 실시간 대시보드</a></li>
-    <li><a href="{BASE}patterns/log-analytics.html" data-key="pat-log">PAT-2. 로그 분석</a></li>
-    <li><a href="{BASE}patterns/lakehouse.html" data-key="pat-lake">PAT-3. Lakehouse 가속</a></li>
-    <li><a href="{BASE}patterns/ad-analytics.html" data-key="pat-ad">PAT-4. 광고 분석</a></li>
-
-    <li class="section-title">외부 도구 연동</li>
-    <li><a href="{BASE}integrations/bi-tools.html" data-key="int-bi">INT-1. BI 도구 (Tableau/Superset...)</a></li>
-    <li><a href="{BASE}integrations/dbt.html" data-key="int-dbt">INT-2. dbt (dbt-starrocks)</a></li>
-    <li><a href="{BASE}integrations/dagster-dbt.html" data-key="int-dagster">INT-3. Dagster + dbt 파이프라인</a></li>
-    <li><a href="{BASE}integrations/airflow.html" data-key="int-airflow">INT-4. Airflow</a></li>
-    <li><a href="{BASE}integrations/spark-flink.html" data-key="int-spark">INT-5. Spark / Flink</a></li>
+    <li class="section-title">클러스터 구축</li>
+    <li><a href="{BASE}04-deployment.html" data-key="deployment">배포 가이드</a></li>
+    <li><a href="{BASE}04b-capacity-planning.html" data-key="capacity">Capacity Planning · LB</a></li>
 
     <li class="section-title">클러스터 운영</li>
-    <li><a href="{BASE}04-deployment.html" data-key="deployment">4. 배포 / 클러스터 구축</a></li>
-    <li><a href="{BASE}04b-capacity-planning.html" data-key="capacity">4-1. Capacity Planning · LB</a></li>
-    <li><a href="{BASE}05-administration.html" data-key="administration">5. 운영 · 백업</a></li>
-    <li><a href="{BASE}08-troubleshooting.html" data-key="troubleshooting">5-1. 트러블슈팅</a></li>
-    <li><a href="{BASE}09-monitoring.html" data-key="monitoring">5-2. 모니터링</a></li>
-    <li><a href="{BASE}10b-shared-nothing.html" data-key="shared-nothing">5-3a. Shared-Nothing 모드</a></li>
-    <li><a href="{BASE}10-shared-data.html" data-key="shared-data">5-3b. Shared-Data 모드</a></li>
-    <li><a href="{BASE}11-security.html" data-key="security">5-4. 보안 (SSL/LDAP/RBAC)</a></li>
+    <li><a href="{BASE}05-administration.html" data-key="administration">운영 · 백업</a></li>
+    <li><a href="{BASE}08-troubleshooting.html" data-key="troubleshooting">트러블슈팅</a></li>
+    <li><a href="{BASE}09-monitoring.html" data-key="monitoring">모니터링</a></li>
+    <li><a href="{BASE}10b-shared-nothing.html" data-key="shared-nothing">Shared-Nothing 모드</a></li>
+    <li><a href="{BASE}10-shared-data.html" data-key="shared-data">Shared-Data 모드</a></li>
+    <li><a href="{BASE}11-security.html" data-key="security">보안 (SSL · LDAP · RBAC)</a></li>
 
-    <li class="section-title">운영 자동화 (Runbook)</li>
-    <li><a href="{BASE}ops/ansible-deploy.html" data-key="ops-ansible">OPS-1. Ansible 배포</a></li>
-    <li><a href="{BASE}ops/healthcheck-sql.html" data-key="ops-health">OPS-2. 헬스체크 SQL</a></li>
-    <li><a href="{BASE}ops/upgrade-runbook.html" data-key="ops-upgrade">OPS-3. 업그레이드 절차서</a></li>
-    <li><a href="{BASE}ops/backup-runbook.html" data-key="ops-backup">OPS-4. 백업 절차서</a></li>
+    <li class="section-title">데이터 적재</li>
+    <li><a href="{BASE}loading/index.html" data-key="loading-index">적재 개요</a></li>
+    <li><a href="{BASE}loading/stream-load.html" data-key="loading-stream">Stream Load</a></li>
+    <li><a href="{BASE}loading/routine-load.html" data-key="loading-routine">Routine Load (Kafka)</a></li>
+    <li><a href="{BASE}loading/broker-load.html" data-key="loading-broker">Broker Load</a></li>
+    <li><a href="{BASE}loading/insert-files.html" data-key="loading-insert">INSERT · FILES()</a></li>
 
-    <li class="section-title">시스템 내부 동작</li>
-    <li><a href="{BASE}internals/compaction.html" data-key="int-compact">SYS-1. Compaction</a></li>
-    <li><a href="{BASE}internals/storage-format.html" data-key="int-storage">SYS-2. 스토리지 포맷</a></li>
-    <li><a href="{BASE}internals/memtracker.html" data-key="int-mem">SYS-3. MemTracker</a></li>
-    <li><a href="{BASE}internals/tablet-replica.html" data-key="int-tablet">SYS-4. Tablet 복제·복구</a></li>
+    <li class="section-title">External Catalog</li>
+    <li><a href="{BASE}catalogs/index.html" data-key="catalogs-index">카탈로그 개요</a></li>
+    <li><a href="{BASE}catalogs/hive.html" data-key="catalog-hive">Hive</a></li>
+    <li><a href="{BASE}catalogs/iceberg.html" data-key="catalog-iceberg">Iceberg</a></li>
+    <li><a href="{BASE}catalogs/hudi.html" data-key="catalog-hudi">Hudi</a></li>
+    <li><a href="{BASE}catalogs/delta.html" data-key="catalog-delta">Delta Lake</a></li>
+    <li><a href="{BASE}catalogs/unified.html" data-key="catalog-unified">Unified</a></li>
+    <li><a href="{BASE}catalogs/jdbc-mysql.html" data-key="catalog-jdbc">JDBC (MySQL / PG / Oracle ...)</a></li>
+    <li><a href="{BASE}catalogs/paimon.html" data-key="catalog-paimon">Paimon</a></li>
+    <li><a href="{BASE}catalogs/elasticsearch.html" data-key="catalog-es">Elasticsearch</a></li>
+    <li><a href="{BASE}catalogs/kudu.html" data-key="catalog-kudu">Kudu</a></li>
+    <li><a href="{BASE}catalogs/maxcompute.html" data-key="catalog-maxcompute">MaxCompute</a></li>
+
+    <li class="section-title">쿼리 · Materialized View</li>
+    <li><a href="{BASE}06-query-mv.html" data-key="query-mv">쿼리 · MV 개요</a></li>
+    <li><a href="{BASE}mv/01-rewrite-conditions.html" data-key="mv-rewrite">MV Query Rewrite</a></li>
+    <li><a href="{BASE}mv/02-partitioning.html" data-key="mv-partition">MV 파티션 정합</a></li>
+    <li><a href="{BASE}mv/03-trigger-refresh.html" data-key="mv-trigger">MV 리프레시 모드</a></li>
+    <li><a href="{BASE}mv/04-troubleshooting.html" data-key="mv-trouble">MV 트러블슈팅</a></li>
+
+    <li class="section-title">SQL 레퍼런스</li>
+    <li><a href="{BASE}sql/ddl.html" data-key="sql-ddl">DDL</a></li>
+    <li><a href="{BASE}sql/dml.html" data-key="sql-dml">DML</a></li>
+    <li><a href="{BASE}sql/functions-date.html" data-key="sql-date">날짜 · 시간 함수</a></li>
+    <li><a href="{BASE}sql/functions-string.html" data-key="sql-string">문자열 함수</a></li>
+    <li><a href="{BASE}sql/functions-agg-window.html" data-key="sql-agg">집계 · 윈도 함수</a></li>
+    <li><a href="{BASE}sql/functions-bitmap-hll.html" data-key="sql-bitmap">Bitmap · HLL</a></li>
+    <li><a href="{BASE}sql/json.html" data-key="sql-json">JSON</a></li>
+    <li><a href="{BASE}sql/mysql-compat.html" data-key="sql-mysql">MySQL 호환성</a></li>
 
     <li class="section-title">튜닝</li>
-    <li><a href="{BASE}07-tuning.html" data-key="tuning">8. 튜닝 가이드</a></li>
+    <li><a href="{BASE}07-tuning.html" data-key="tuning">튜닝 가이드</a></li>
+
+    <li class="section-title">사용 사례별 가이드</li>
+    <li><a href="{BASE}patterns/realtime-dashboard.html" data-key="pat-rt">실시간 대시보드</a></li>
+    <li><a href="{BASE}patterns/log-analytics.html" data-key="pat-log">로그 분석</a></li>
+    <li><a href="{BASE}patterns/lakehouse.html" data-key="pat-lake">Lakehouse 가속</a></li>
+    <li><a href="{BASE}patterns/ad-analytics.html" data-key="pat-ad">광고 분석</a></li>
+
+    <li class="section-title">외부 도구 연동</li>
+    <li><a href="{BASE}integrations/bi-tools.html" data-key="int-bi">BI 도구 (Tableau · Superset ...)</a></li>
+    <li><a href="{BASE}integrations/dbt.html" data-key="int-dbt">dbt</a></li>
+    <li><a href="{BASE}integrations/dagster-dbt.html" data-key="int-dagster">Dagster + dbt 파이프라인</a></li>
+    <li><a href="{BASE}integrations/airflow.html" data-key="int-airflow">Airflow</a></li>
+    <li><a href="{BASE}integrations/spark-flink.html" data-key="int-spark">Spark / Flink</a></li>
+
+    <li class="section-title">운영 자동화 (Runbook)</li>
+    <li><a href="{BASE}ops/ansible-deploy.html" data-key="ops-ansible">Ansible 배포</a></li>
+    <li><a href="{BASE}ops/healthcheck-sql.html" data-key="ops-health">헬스체크 SQL</a></li>
+    <li><a href="{BASE}ops/upgrade-runbook.html" data-key="ops-upgrade">업그레이드 절차서</a></li>
+    <li><a href="{BASE}ops/backup-runbook.html" data-key="ops-backup">백업 절차서</a></li>
+
+    <li class="section-title">시스템 내부 동작</li>
+    <li><a href="{BASE}internals/compaction.html" data-key="int-compact">Compaction</a></li>
+    <li><a href="{BASE}internals/storage-format.html" data-key="int-storage">스토리지 포맷</a></li>
+    <li><a href="{BASE}internals/memtracker.html" data-key="int-mem">MemTracker</a></li>
+    <li><a href="{BASE}internals/tablet-replica.html" data-key="int-tablet">Tablet 복제 · 복구</a></li>
 
     <li class="section-title">마이그레이션</li>
-    <li><a href="{BASE}migration/from-mysql.html" data-key="mig-mysql">MIG-1. MySQL → SR</a></li>
-    <li><a href="{BASE}migration/from-clickhouse.html" data-key="mig-ch">MIG-2. ClickHouse → SR</a></li>
-    <li><a href="{BASE}migration/from-trino.html" data-key="mig-trino">MIG-3. Trino → SR</a></li>
-    <li><a href="{BASE}migration/from-doris.html" data-key="mig-doris">MIG-4. Doris → SR</a></li>
+    <li><a href="{BASE}migration/from-mysql.html" data-key="mig-mysql">MySQL → SR</a></li>
+    <li><a href="{BASE}migration/from-clickhouse.html" data-key="mig-ch">ClickHouse → SR</a></li>
+    <li><a href="{BASE}migration/from-trino.html" data-key="mig-trino">Trino → SR</a></li>
+    <li><a href="{BASE}migration/from-doris.html" data-key="mig-doris">Doris → SR</a></li>
 
     <li class="section-title">실습 (Hands-on)</li>
-    <li><a href="{BASE}practice/01-docker-quickstart.html" data-key="practice-docker">P-1. Docker 5분 퀵스타트</a></li>
-    <li><a href="{BASE}practice/02-first-table-and-load.html" data-key="practice-first">P-2. 첫 테이블·Stream Load</a></li>
-    <li><a href="{BASE}practice/03-hive-on-minio.html" data-key="practice-hive">P-3. Hive + MinIO 실습</a></li>
-    <li><a href="{BASE}practice/04-async-mv.html" data-key="practice-mv">P-4. Async MV 실습</a></li>
-    <li><a href="{BASE}practice/05-backup-restore.html" data-key="practice-backup">P-5. 백업·복원 실습</a></li>
+    <li><a href="{BASE}practice/01-docker-quickstart.html" data-key="practice-docker">Docker 5분 퀵스타트</a></li>
+    <li><a href="{BASE}practice/02-first-table-and-load.html" data-key="practice-first">첫 테이블 · Stream Load</a></li>
+    <li><a href="{BASE}practice/03-hive-on-minio.html" data-key="practice-hive">Hive + MinIO 실습</a></li>
+    <li><a href="{BASE}practice/04-async-mv.html" data-key="practice-mv">Async MV 실습</a></li>
+    <li><a href="{BASE}practice/05-backup-restore.html" data-key="practice-backup">백업 · 복원 실습</a></li>
   </ol>
 
   <p class="section-title" style="margin-top: 24px;">참고</p>
