@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitOps (ArgoCD/Flux) — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-gitops" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / GitOps</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>GitOps — StarRocks 클러스터·스키마를 Git으로</h1>
+
+    <h2 id="why">왜</h2>
+    <ul>
+      <li>클러스터 정의·스키마·MV 정의가 Git에 있으면 <strong>리뷰·롤백·감사</strong>가 자동 보장.</li>
+      <li>운영자별로 직접 ALTER하던 패턴 → PR 기반 변경.</li>
+      <li>K8s Operator + ArgoCD/Flux 조합이 가장 자연스럽다.</li>
+    </ul>
+
+    <h2 id="scope">GitOps에 두는 것 vs 안 두는 것</h2>
+    <table>
+      <thead><tr><th>구분</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td>✅ Git에 둠</td><td>Operator/StarRocksCluster CR, ConfigMap(be.conf/fe.conf), CREATE TABLE/MV DDL, Routine Load 정의, 권한·역할 정의</td></tr>
+        <tr><td>✅ Git에 둠 (별도 dbt repo)</td><td>마트 모델 SQL, MV, 변환 로직</td></tr>
+        <tr><td>❌ Git에 안 둠</td><td>비밀번호/keytab(Vault), 런타임 메타(BDB JE), 사용자 데이터, audit log</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="argo">ArgoCD 패턴</h2>
+<pre><code># Application 정의 (ArgoCD)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: starrocks-prod
+  namespace: argocd
+spec:
+  project: data-platform
+  source:
+    repoURL: https://git.internal/sr-prod
+    path: k8s/
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: starrocks
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true</code></pre>
+
+    <h2 id="layout">Repo 레이아웃 (예시)</h2>
+<pre><code>sr-prod/
+├── k8s/                       # 클러스터 정의 (ArgoCD 동기 대상)
+│   ├── operator.yaml
+│   ├── cluster.yaml           # StarRocksCluster CR
+│   ├── be-conf.configmap.yaml
+│   └── service.yaml
+├── sql/                       # DDL (별도 잡으로 적용)
+│   ├── 0001_create_db.sql
+│   ├── 0010_orders_table.sql
+│   ├── 0011_orders_index.sql
+│   ├── 0020_mv_orders_d.sql
+│   └── 0030_routine_load.sql
+├── dbt/                       # dbt 모델 (별도 dbt run)
+│   └── models/
+└── runbooks/
+    └── *.md</code></pre>
+
+    <h2 id="ddl-apply">DDL 적용 패턴</h2>
+    <p>K8s Operator는 클러스터 인프라까지만 책임. 스키마·MV·권한은 별도 잡으로 적용.</p>
+<pre><code># GitHub Actions / Argo Workflow / Jenkins 어느 쪽이든
+# PR merge → 새 SQL 파일 (예: 0050_*.sql)이 추가되면 적용
+
+- name: apply DDL
+  run: |
+    for f in $(git diff --name-only HEAD~1 HEAD | grep '^sql/.*\.sql$' | sort); do
+      mysql -h sr-prod-mysql-ext -P 9030 -u ddl_user -p$DDL_PWD &lt; "$f"
+    done</code></pre>
+    <p>도구별 대안: <strong>Liquibase</strong> 또는 <strong>Flyway</strong>가 변경 추적 + 멱등성 + 롤백을 잘 다룸.</p>
+
+    <h2 id="dbt-flow">dbt 모델은 별도 흐름</h2>
+    <p>dbt는 자체 상태 추적이 있어 GitOps와 자연스럽게 결합. dbt repo는 별도이거나 같은 repo의 <code>dbt/</code> 하위로.</p>
+
+    <h2 id="rollback">롤백</h2>
+    <ul>
+      <li>K8s 인프라: <code>git revert</code> → ArgoCD 자동 동기.</li>
+      <li>DDL: 이전 SQL의 reverse를 새 PR로 (DROP COLUMN, REVERT INDEX 등). DDL은 단순 git revert가 위험.</li>
+    </ul>
+
+    <h2 id="audit">감사 로그</h2>
+    <p>SR audit_loader 플러그인 + Git PR 기록을 함께 보관하면 "누가 언제 무엇을 바꿨는지" 추적 완성.</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>온프레 PM 환경에서도 클러스터 정의를 Ansible repo + DDL을 별도 git repo에 두는 식으로 GitOps 사상의 일부를 가져올 수 있음.</li>
+        <li>처음부터 100% GitOps는 부담 — 단계적으로: ① DDL을 git repo에 모음 → ② dbt 도입 → ③ K8s 이행 시 ArgoCD.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./k8s-operator.html">← K8s Operator</a>
+        <a href="../cheatsheet/admin-sql.html">다음 → 운영 SQL</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://argo-cd.readthedocs.io/" target="_blank" rel="noopener">argo-cd.readthedocs.io</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

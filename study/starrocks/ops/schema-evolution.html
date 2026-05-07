@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>스키마 진화 (ALTER 표준) — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-schema" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / 스키마 진화</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>스키마 진화 (ALTER 표준)</h1>
+
+    <h2 id="overview">변경 종류와 비용</h2>
+    <table>
+      <thead><tr><th>변경</th><th>비용</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>컬럼 추가 (NULL 허용)</td><td>매우 작음</td><td>메타만 변경. 즉시 완료.</td></tr>
+        <tr><td>컬럼 추가 (DEFAULT 값)</td><td>작음</td><td>적재 시점부터 채워짐. 과거 row는 NULL 또는 DEFAULT.</td></tr>
+        <tr><td>컬럼 삭제</td><td>작음</td><td>메타만 변경. 데이터는 백그라운드 정리.</td></tr>
+        <tr><td>컬럼 이름 변경</td><td>작음</td><td>메타만 변경.</td></tr>
+        <tr><td>컬럼 타입 호환 위젠 (INT→BIGINT)</td><td>중간</td><td>Schema Change 잡 발생.</td></tr>
+        <tr><td>컬럼 타입 변경 (DOUBLE→DECIMAL)</td><td>큼</td><td>전체 재작성. 야간 권장.</td></tr>
+        <tr><td>인덱스 추가/삭제</td><td>중간</td><td>BUILD INDEX 또는 컴팩션 통해 적용.</td></tr>
+        <tr><td>분배 키 변경</td><td>불가</td><td>새 테이블 생성 + INSERT INTO ... SELECT.</td></tr>
+        <tr><td>모델 변경 (Duplicate↔PK 등)</td><td>불가</td><td>새 테이블.</td></tr>
+        <tr><td>파티션 키 변경</td><td>불가</td><td>새 테이블.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="add">컬럼 추가</h2>
+<pre><code>ALTER TABLE mart.orders ADD COLUMN memo VARCHAR(256) DEFAULT '';
+
+-- 위치 지정
+ALTER TABLE mart.orders ADD COLUMN memo VARCHAR(256) AFTER status;
+
+-- 여러 컬럼 한 번에
+ALTER TABLE mart.orders
+  ADD COLUMN memo VARCHAR(256),
+  ADD COLUMN tags ARRAY&lt;STRING&gt;;</code></pre>
+
+    <h2 id="drop-rename">삭제 / 이름 변경</h2>
+<pre><code>ALTER TABLE mart.orders DROP COLUMN memo;
+ALTER TABLE mart.orders RENAME COLUMN memo to note;</code></pre>
+
+    <h2 id="modify">타입 변경</h2>
+<pre><code>ALTER TABLE mart.orders MODIFY COLUMN amount DECIMAL(20, 4);
+
+-- 진행 상황
+SHOW ALTER TABLE COLUMN FROM mart;
+SHOW ALTER TABLE COLUMN WHERE STATE != 'FINISHED';
+
+-- 취소 (FINISHED 전)
+CANCEL ALTER TABLE COLUMN FROM mart.orders;</code></pre>
+
+    <h2 id="index">인덱스</h2>
+<pre><code>ALTER TABLE mart.orders ADD INDEX idx_status (status) USING BITMAP;
+ALTER TABLE mart.orders SET ("bloom_filter_columns" = "user_id, order_id");
+ALTER TABLE mart.orders DROP INDEX idx_status;
+
+-- 기존 데이터에 인덱스 적용 강제
+ALTER TABLE mart.orders BUILD INDEX idx_status FOR ALL TABLETS;</code></pre>
+
+    <h2 id="partition">파티션 관리</h2>
+<pre><code>-- 동적 파티션 옵션 변경
+ALTER TABLE mart.orders SET (
+  "dynamic_partition.start" = "-180",
+  "dynamic_partition.end"   = "7"
+);
+
+-- 파티션 추가 / 삭제
+ALTER TABLE mart.orders ADD PARTITION p20260601 VALUES [('2026-06-01'),('2026-06-02'));
+ALTER TABLE mart.orders DROP PARTITION p20260101;
+
+-- 파티션 내용 비우기 (구조 유지)
+TRUNCATE TABLE mart.orders PARTITION (p20260101);</code></pre>
+
+    <h2 id="incompatible">불가능한 변경 — 회피 패턴</h2>
+    <p>분배 키·파티션 키·모델은 ALTER로 변경 못함. <strong>새 테이블 + 적재 + 스왑</strong>이 표준.</p>
+<pre><code>-- 1) 새 테이블 (변경된 분배/파티션/모델)
+CREATE TABLE mart.orders_v2 (
+  ...
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('day', updated_at)
+DISTRIBUTED BY HASH(user_id)            -- 변경됨
+PROPERTIES (...);
+
+-- 2) 백필 (파티션 단위로 끊어서)
+INSERT INTO mart.orders_v2 SELECT * FROM mart.orders WHERE updated_at &gt;= '2026-04-01';
+
+-- 3) ETL을 v2로 전환 (Routine Load 등)
+
+-- 4) 검증 후 스왑
+ALTER TABLE mart.orders RENAME orders_legacy;
+ALTER TABLE mart.orders_v2 RENAME orders;
+
+-- 5) 일정 기간 후 legacy 삭제
+DROP TABLE mart.orders_legacy;</code></pre>
+
+    <h2 id="mv-impact">MV 영향</h2>
+    <ul>
+      <li>베이스 테이블의 컬럼 추가는 일반적으로 MV에 영향 없음.</li>
+      <li>컬럼 삭제·타입 변경은 MV 정의가 의존하면 INACTIVE로 떨어질 수 있음. <code>SHOW MATERIALIZED VIEW</code>로 확인 후 ACTIVE로 복구 또는 재생성.</li>
+      <li>가능하면 <strong>스키마 변경 전후로 MV 한 번 리프레시</strong>해 정합 확인.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>운영 DDL은 항상 PR/리뷰 후 적용. 잘못된 ALTER 후 리커버리는 비싸다.</li>
+        <li>큰 타입 변경은 야간 + Resource Group 격리.</li>
+        <li>분배/파티션 변경이 필요하면 <code>_v2</code> 테이블 패턴이 표준 — RENAME 스왑이 안전한 컷오버.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./routine-load-runbook.html">← Routine Load</a>
+        <a href="./dr-scenarios.html">다음 → DR 시나리오</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-statements/data-definition/ALTER_TABLE/" target="_blank" rel="noopener">docs.starrocks.io / ALTER TABLE</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

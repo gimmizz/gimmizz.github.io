@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>K8s Operator · Helm — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-k8s" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / K8s Operator</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>K8s Operator · Helm 배포</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks Operator + Helm chart로 K8s 위에 클러스터를 선언적으로 운영. 클라우드 또는 K8s 표준화된 사내 환경에서 유리.</p>
+    </div>
+
+    <h2 id="install">Operator 설치</h2>
+<pre><code># Helm repo 추가
+helm repo add starrocks https://starrocks.github.io/starrocks-kubernetes-operator
+helm repo update
+
+# Operator 설치
+helm install starrocks-operator starrocks/operator \
+  -n starrocks --create-namespace</code></pre>
+
+    <h2 id="cluster">StarRocksCluster CRD</h2>
+<pre><code># sr-cluster.yaml
+apiVersion: starrocks.com/v1
+kind: StarRocksCluster
+metadata:
+  name: sr-prod
+  namespace: starrocks
+spec:
+  starRocksFeSpec:
+    replicas: 3
+    image: starrocks/fe-ubuntu:4.1.0
+    requests:
+      cpu: 4
+      memory: 16Gi
+    limits:
+      cpu: 8
+      memory: 32Gi
+    storageVolumes:
+      - name: fe-meta
+        storageClassName: fast-ssd
+        storageSize: 100Gi
+        mountPath: /opt/starrocks/fe/meta
+  starRocksBeSpec:
+    replicas: 5
+    image: starrocks/be-ubuntu:4.1.0
+    requests:
+      cpu: 16
+      memory: 64Gi
+    limits:
+      cpu: 32
+      memory: 128Gi
+    storageVolumes:
+      - name: be-data
+        storageClassName: fast-ssd
+        storageSize: 1Ti
+        mountPath: /opt/starrocks/be/storage
+    configMapInfo:
+      configMapName: be-conf
+      resolveKey: be.conf</code></pre>
+<pre><code>kubectl apply -f sr-cluster.yaml
+
+# 상태 확인
+kubectl get starrockscluster -n starrocks
+kubectl get pods -n starrocks
+kubectl logs -f sr-prod-fe-0 -n starrocks</code></pre>
+
+    <h2 id="config">be.conf / fe.conf 주입</h2>
+<pre><code>kubectl create configmap be-conf -n starrocks \
+  --from-file=be.conf=./be.conf
+
+# 변경 후 BE 재시작 트리거
+kubectl rollout restart statefulset/sr-prod-be -n starrocks</code></pre>
+
+    <h2 id="service">Service / Ingress</h2>
+<pre><code># Operator가 자동으로 만드는 Service:
+kubectl get svc -n starrocks
+# - sr-prod-fe-service       (MySQL :9030, HTTP :8030)
+# - sr-prod-fe-search        (Headless)
+# - sr-prod-be-service
+
+# 외부 노출 (LoadBalancer 또는 Ingress)
+apiVersion: v1
+kind: Service
+metadata:
+  name: sr-prod-mysql-ext
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: sr-prod-fe
+  ports:
+    - port: 9030
+      targetPort: 9030</code></pre>
+
+    <h2 id="shared-data">Shared-Data on K8s</h2>
+    <p>K8s 환경에서는 PV 비용 부담 + 탄력성 요구가 크므로 Shared-Data 모드와 잘 어울린다.</p>
+<pre><code>spec:
+  starRocksFeSpec: { ... }
+  starRocksCnSpec:                    # CN spec (BE 대신)
+    replicas: 6
+    image: starrocks/cn-ubuntu:4.1.0
+    storageVolumes:                   # 캐시용 로컬 SSD
+      - name: cn-cache
+        storageClassName: local-ssd
+        storageSize: 500Gi
+        mountPath: /opt/starrocks/cn/cache
+  storageSpec:
+    storageVolume:
+      type: S3
+      bucket: sr-warehouse
+      endpoint: https://s3.example.com
+      credential:
+        secretName: s3-creds</code></pre>
+
+    <h2 id="autoscale">자동 확장 (HPA)</h2>
+<pre><code>apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sr-prod-cn-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: sr-prod-cn
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70</code></pre>
+
+    <h2 id="caveats">주의</h2>
+    <ul>
+      <li><strong>BE는 stateful</strong>: PVC 보관·노드 친화성 설정 필수.</li>
+      <li>K8s 노드 재기동 = BE 한 대 다운으로 취급 — 한 번에 너무 많이 재기동되지 않게 PodDisruptionBudget 설정.</li>
+      <li>Shared-Nothing K8s에서 Pod IP 변경이 잦으면 FQDN 모드 사용.</li>
+      <li>Ingress보다 LoadBalancer가 MySQL 프로토콜에 자연스럽다 (TCP).</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>온프레 PM 클러스터를 먼저 운영하고, 다음 단계로 클라우드 K8s 환경(또는 자동확장이 필요한 워크로드)에 한해 K8s 도입을 검토.</li>
+        <li>K8s에서 운영하면 GitOps와 자연스럽게 결합 — 다음 페이지(<a href="./gitops.html">GitOps</a>) 참고.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./dr-scenarios.html">← DR</a>
+        <a href="./gitops.html">다음 → GitOps</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://github.com/StarRocks/starrocks-kubernetes-operator" target="_blank" rel="noopener">github.com/StarRocks/starrocks-kubernetes-operator</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DR 시나리오 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-dr" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / DR</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>DR (Disaster Recovery) 시나리오</h1>
+
+    <div class="callout note">
+      <div class="callout-title">💡 RTO / RPO 정의</div>
+      <p><strong>RTO</strong>: 장애 발생부터 서비스 복구까지 허용 시간.
+      <strong>RPO</strong>: 손실 허용 데이터 시점 (예: "마지막 1시간 데이터까지는 손실 OK").
+      DR은 둘을 명확히 정해 놓고 시나리오별 절차를 검증하는 작업.</p>
+    </div>
+
+    <h2 id="s1">시나리오 1 — BE 1대 다운</h2>
+    <table>
+      <thead><tr><th>항목</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td>영향</td><td>해당 BE의 Tablet은 다른 2복제본에서 처리 — 쿼리 정상</td></tr>
+        <tr><td>자동 복구</td><td><code>tablet_repair_delay_factor_second</code>(기본 60초) 후 자동 클론 시작</td></tr>
+        <tr><td>운영자 대응</td><td>BE 재기동 시도. 5분 이상 죽어 있으면 클론 큐 모니터링</td></tr>
+        <tr><td>RTO</td><td>0 (쿼리 무중단)</td></tr>
+        <tr><td>RPO</td><td>0</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="s2">시나리오 2 — BE 다수 동시 다운</h2>
+    <ul>
+      <li>한 Tablet의 모든 복제본이 동시에 죽으면 그 Tablet은 일시 접근 불가.</li>
+      <li>BE 중 하나만 살아나면 나머지가 자동 복구됨.</li>
+      <li>대응: BE 다수가 같은 rack/스위치에 몰리지 않게 배포 단계에서 분산. 복제본 배치 정책 점검.</li>
+    </ul>
+
+    <h2 id="s3">시나리오 3 — FE 1~2대 다운</h2>
+    <ul>
+      <li>FE 1대 다운: Leader 자동 재선출. 영향 거의 없음.</li>
+      <li>FE 2대 다운(=Follower 과반 깨짐): 메타데이터 쓰기 불가. 읽기는 가능.</li>
+      <li>대응: 죽은 FE 재기동. 빠르게 복구 안 되면 Observer 1대를 임시 Follower로 승격(<code>ALTER SYSTEM ADD FOLLOWER</code>)도 가능.</li>
+    </ul>
+
+    <h2 id="s4">시나리오 4 — FE 메타데이터 손상 (가장 무서운 케이스)</h2>
+<div class="mermaid">
+graph LR
+  D["FE 메타 손상 감지<br/>(BDB JE 부트 실패)"]
+  S["모든 FE 정지"]
+  R["fe-meta 백업 복원<br/>(어제 야간 tar.gz)"]
+  L["FE 1대만 먼저 기동<br/>(Leader 격)"]
+  H["다른 FE는 --helper 로 합류"]
+  V["SHOW FRONTENDS / BACKENDS<br/>alive 확인"]
+  D --> S --> R --> L --> H --> V
+</div>
+<pre><code># 절차
+1. 모든 FE에서 stop_fe.sh
+2. 가장 최신 fe-meta 백업을 같은 위치에 압축 해제
+   (백업 정책: 매일 야간 tar 후 별도 NAS/HDFS, 30~90일 보관)
+3. 한 FE만 먼저 시작 → 메타가 그대로 살아남
+4. 다른 FE에서:
+   bin/start_fe.sh --daemon --helper &lt;leader&gt;:9010
+5. SHOW FRONTENDS / SHOW BACKENDS alive 확인</code></pre>
+    <p>RPO ≈ 마지막 fe-meta 백업 시점(보통 0~24h). RTO ≈ 30분~2시간.</p>
+
+    <h2 id="s5">시나리오 5 — 테이블 실수 DROP</h2>
+<pre><code>-- 가장 마지막 SNAPSHOT으로 복원
+RESTORE SNAPSHOT mart.snap_20260506
+FROM backup_hdfs
+ON (orders)
+PROPERTIES (
+  "backup_timestamp" = "...",
+  "replication_num"  = "3"
+);
+
+SHOW RESTORE FROM mart\G</code></pre>
+    <p>예방: <code>DROP TABLE</code> 대신 <code>RENAME orders → orders_legacy_YYYYMMDD</code> 후 며칠 두고 삭제.</p>
+
+    <h2 id="s6">시나리오 6 — 사이트 완전 손실</h2>
+    <ol>
+      <li>새 데이터센터/리전에 동일 버전 SR 클러스터 구축 (<a href="./ansible-deploy.html">Ansible</a> 활용).</li>
+      <li>fe-meta 백업 복원.</li>
+      <li>BACKUP SNAPSHOT으로 핵심 마트 RESTORE.</li>
+      <li>외부 카탈로그(Hive/Iceberg/MySQL)는 원천이 살아 있다면 카탈로그 정의만 다시 만들면 즉시 사용 가능.</li>
+      <li>Routine Load 잡 재생성 (Kafka offset은 마지막 적재 시점 + α부터).</li>
+      <li>BI/도구의 connection 호스트 변경 (FE LB 주소).</li>
+    </ol>
+
+    <h2 id="drill">DR 리허설</h2>
+    <ul>
+      <li><strong>분기 1회</strong>: 임시 클러스터에 fe-meta + 핵심 SNAPSHOT 복원 → 결과 SQL 비교 → RTO 측정.</li>
+      <li><strong>월 1회</strong>: BE 1대 강제 종료 → 자동 복구 확인.</li>
+      <li><strong>매주</strong>: 백업 잡 성공 여부 자동 검증.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>가장 큰 약점은 fe-meta. <strong>매일 야간 백업 + 30~90일 보존</strong>은 타협 불가.</li>
+        <li>BACKUP은 외부 저장소(별도 장애 도메인)에. 같은 사이트에만 두면 무의미.</li>
+        <li>외부 카탈로그가 많을수록 DR이 실은 가벼워진다 — 데이터의 책임이 원천에 있어 SR은 카탈로그 정의만 복원하면 됨.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./schema-evolution.html">← 스키마 진화</a>
+        <a href="./k8s-operator.html">다음 → K8s Operator</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/Backup_and_restore/" target="_blank" rel="noopener">docs.starrocks.io / Backup &amp; restore</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

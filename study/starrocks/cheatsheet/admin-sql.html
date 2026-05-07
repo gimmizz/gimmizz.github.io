@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>운영 SQL Cheat Sheet — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="cs-admin" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / Cheat Sheet / 운영 SQL</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Cheat Sheet — 운영 SQL 모음</h1>
+
+    <h2 id="cluster">클러스터 상태</h2>
+<pre><code>SHOW FRONTENDS;
+SHOW BACKENDS;
+SHOW BROKER;
+SHOW VARIABLES;
+SHOW PROC '/statistic';                 -- 클러스터 요약
+SHOW PROC '/cluster_balance';           -- Tablet 균형
+SHOW PROC '/backends/&lt;id&gt;/disks';        -- BE 디스크별
+SHOW PROC '/colocation_group';           -- Colocate 그룹
+SHOW PROC '/current_queries';
+
+-- 노드 alive 빠른 확인
+SELECT count(*) AS fe_alive FROM information_schema.frontends WHERE alive='true';
+SELECT count(*) AS be_alive FROM information_schema.backends  WHERE alive='true';</code></pre>
+
+    <h2 id="nodes">노드 추가 / 제거</h2>
+<pre><code>ALTER SYSTEM ADD FOLLOWER  "fe-new:9010";
+ALTER SYSTEM ADD OBSERVER  "fe-obs:9010";
+ALTER SYSTEM ADD BACKEND   "be-new:9050";
+
+-- 안전 제거 절차
+ALTER SYSTEM DECOMMISSION BACKEND "old-be:9050";
+-- TabletNum이 0이 될 때까지 대기 후
+ALTER SYSTEM DROP BACKEND "old-be:9050";
+
+ALTER SYSTEM DROP FOLLOWER "fe-old:9010";</code></pre>
+
+    <h2 id="query">진행 쿼리 / 강제 종료</h2>
+<pre><code>SHOW PROCESSLIST;
+SHOW PROC '/current_queries';
+
+KILL QUERY &lt;id&gt;;
+KILL CONNECTION &lt;id&gt;;
+
+-- 30분 이상 도는 쿼리
+SELECT id, user, host, db, time, info
+FROM information_schema.processlist WHERE time &gt; 1800;</code></pre>
+
+    <h2 id="loads">적재 진행/실패</h2>
+<pre><code>SHOW LOAD WHERE STATE != 'FINISHED';
+SHOW LOAD WHERE LABEL = 'orders_20260507_001';
+SHOW STREAM LOAD WHERE STATE = 'FAILED';
+SHOW ROUTINE LOAD;
+SHOW ROUTINE LOAD FOR mart.orders_cdc\G
+
+-- Routine Load 제어
+PAUSE  ROUTINE LOAD FOR mart.orders_cdc;
+RESUME ROUTINE LOAD FOR mart.orders_cdc;
+STOP   ROUTINE LOAD FOR mart.orders_cdc;</code></pre>
+
+    <h2 id="mv">MV</h2>
+<pre><code>SHOW MATERIALIZED VIEWS;
+SHOW MATERIALIZED VIEW mv_orders_d\G
+
+REFRESH MATERIALIZED VIEW mv_orders_d;
+REFRESH MATERIALIZED VIEW mv_orders_d
+  PARTITION START('2026-05-07') END('2026-05-08') FORCE;
+
+ALTER MATERIALIZED VIEW mv_orders_d ACTIVE;
+ALTER MATERIALIZED VIEW mv_orders_d INACTIVE;
+DROP MATERIALIZED VIEW mv_orders_d;</code></pre>
+
+    <h2 id="catalog">카탈로그</h2>
+<pre><code>SHOW CATALOGS;
+SET CATALOG hive_prod;
+SHOW DATABASES;
+USE dwh;
+REFRESH CATALOG hive_prod;
+REFRESH EXTERNAL TABLE hive_prod.dwh.events;
+REFRESH EXTERNAL TABLE hive_prod.dwh.events PARTITION (dt='2026-05-07');</code></pre>
+
+    <h2 id="user">사용자/권한</h2>
+<pre><code>CREATE USER 'analyst' IDENTIFIED BY 'pass';
+SET PASSWORD FOR 'analyst' = PASSWORD('newpass');
+DROP USER 'analyst';
+
+CREATE ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN DATABASE mart TO ROLE bi_reader;
+GRANT USAGE ON CATALOG hive_prod TO ROLE bi_reader;
+GRANT bi_reader TO USER 'analyst';
+
+SHOW ROLES;
+SHOW GRANTS FOR 'analyst';</code></pre>
+
+    <h2 id="rg">Resource Group</h2>
+<pre><code>CREATE RESOURCE GROUP rg_bi
+WITH ('cpu_core_limit'='8','mem_limit'='30%','concurrency_limit'='100','type'='normal');
+
+ALTER RESOURCE GROUP rg_bi ADD (USER='analyst');
+
+SHOW RESOURCE GROUPS;
+DROP RESOURCE GROUP rg_bi;</code></pre>
+
+    <h2 id="stats">통계</h2>
+<pre><code>ANALYZE TABLE mart.orders;
+ANALYZE TABLE mart.orders WITH SAMPLE 100000 ROWS;
+SHOW STATS META FOR mart.orders;
+SHOW STATS COLUMN FOR mart.orders;</code></pre>
+
+    <h2 id="backup">백업/복원</h2>
+<pre><code>SHOW REPOSITORIES;
+BACKUP SNAPSHOT mart.snap_20260507 TO backup_hdfs ON (orders) PROPERTIES ("type" = "full");
+SHOW BACKUP FROM mart\G
+
+RESTORE SNAPSHOT mart_restored.snap_20260507 FROM backup_hdfs ON (orders)
+PROPERTIES ("backup_timestamp" = "...", "replication_num" = "3");
+SHOW RESTORE FROM mart_restored\G</code></pre>
+
+    <h2 id="alter">DDL 빠른 모음</h2>
+<pre><code>ALTER TABLE mart.orders ADD COLUMN memo VARCHAR(256);
+ALTER TABLE mart.orders DROP COLUMN memo;
+ALTER TABLE mart.orders MODIFY COLUMN amount DECIMAL(20,4);
+ALTER TABLE mart.orders ADD INDEX idx_status (status) USING BITMAP;
+ALTER TABLE mart.orders SET ("bloom_filter_columns" = "user_id");
+
+ALTER TABLE mart.orders ADD PARTITION p20260601 VALUES [('2026-06-01'),('2026-06-02'));
+ALTER TABLE mart.orders DROP PARTITION p20260101;
+TRUNCATE TABLE mart.orders PARTITION (p20260101);
+
+SHOW ALTER TABLE COLUMN WHERE STATE != 'FINISHED';</code></pre>
+
+    <h2 id="config">FE/BE 설정 변경</h2>
+<pre><code>ADMIN SHOW FRONTEND CONFIG LIKE '%cache%';
+ADMIN SET FRONTEND CONFIG ("qe_max_connection" = "4096");
+
+-- BE 설정은 일반적으로 be.conf 수정 + 재기동
+-- 일부 동적 변경 가능한 항목:
+ADMIN SHOW BACKEND CONFIG LIKE '%compaction%';</code></pre>
+
+    <h2 id="profile">쿼리 프로파일</h2>
+<pre><code>SET enable_profile = true;
+-- 쿼리 실행 후
+SHOW PROFILELIST;
+SHOW PROFILE FROM '&lt;profile_id&gt;';</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>이 페이지를 모니터에 띄워 두면 운영 첫 한 달이 훨씬 편합니다.</li>
+        <li>전용 read-only 점검 계정(<code>sr_check</code>)을 만들어 information_schema SELECT 권한만 부여 → 자동 헬스체크에 사용.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../ops/gitops.html">← GitOps</a>
+        <a href="./session-vars.html">다음 → 세션 변수</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-statements/" target="_blank" rel="noopener">docs.starrocks.io / SQL Statements</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

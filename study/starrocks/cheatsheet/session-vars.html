@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>세션 변수 30개 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="cs-vars" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / Cheat Sheet / 세션 변수</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Cheat Sheet — 핵심 세션 변수 30</h1>
+
+    <p>자주 손대는 세션 변수만 추렸습니다. 글로벌 적용은 <code>SET GLOBAL ...</code>, 세션 한정은 <code>SET ...</code>.</p>
+
+    <h2 id="exec">실행 엔진 / 병렬도</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_pipeline_engine</code></td><td>true</td><td>파이프라인 엔진. 끄지 말 것.</td></tr>
+        <tr><td><code>pipeline_dop</code></td><td>0 (auto)</td><td>BE 코어 활용 도. 0=자동.</td></tr>
+        <tr><td><code>parallel_fragment_exec_instance_num</code></td><td>1</td><td>BE당 fragment 인스턴스 수. 무거운 쿼리에 4~8.</td></tr>
+        <tr><td><code>query_timeout</code></td><td>300 (s)</td><td>쿼리 타임아웃.</td></tr>
+        <tr><td><code>query_mem_limit</code></td><td>BE 메모리 비율</td><td>한 쿼리 메모리 한도 (bytes).</td></tr>
+        <tr><td><code>load_mem_limit</code></td><td>0 (auto)</td><td>적재 잡 메모리 한도.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="cbo">옵티마이저 / 통계</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>cbo_enable_low_cardinality_optimize</code></td><td>true</td><td>저카디널리티 dictionary 최적화.</td></tr>
+        <tr><td><code>broadcast_row_limit</code></td><td>15M</td><td>이 행수 이하면 Broadcast Join 우선.</td></tr>
+        <tr><td><code>enable_global_runtime_filter</code></td><td>true</td><td>글로벌 RuntimeFilter.</td></tr>
+        <tr><td><code>enable_local_shuffle_agg</code></td><td>true</td><td>BE 내 로컬 셔플 집계.</td></tr>
+        <tr><td><code>cbo_max_reorder_node_use_exhaustive</code></td><td>4</td><td>완전 탐색 조인 순서 한도.</td></tr>
+        <tr><td><code>statistic_collect_parallel</code></td><td>1</td><td>ANALYZE 병렬도.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="mv">Materialized View</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_materialized_view_rewrite</code></td><td>true</td><td>MV 자동 재작성.</td></tr>
+        <tr><td><code>materialized_view_rewrite_mode</code></td><td>default</td><td>"force_or_default" 등 모드.</td></tr>
+        <tr><td><code>nested_mv_rewrite_max_level</code></td><td>3</td><td>중첩 MV 깊이.</td></tr>
+        <tr><td><code>force_external_table_query_rewrite</code></td><td>false</td><td>외부 카탈로그도 강제 rewrite.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="catalog">External Catalog</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_query_cache</code></td><td>false</td><td>FE 쿼리 결과 캐시.</td></tr>
+        <tr><td><code>enable_data_cache</code></td><td>true</td><td>BE Data Cache 사용.</td></tr>
+        <tr><td><code>connector_io_tasks_per_scan_operator</code></td><td>16</td><td>외부 카탈로그 스캔 IO 작업 수.</td></tr>
+        <tr><td><code>plan_mode</code></td><td>auto</td><td>외부 카탈로그 플랜 모드.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="prof">프로파일·디버깅</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_profile</code></td><td>false</td><td>쿼리 프로파일 기록.</td></tr>
+        <tr><td><code>big_query_profile_threshold</code></td><td>0</td><td>이 시간 초과 쿼리 자동 프로파일.</td></tr>
+        <tr><td><code>runtime_profile_report_interval</code></td><td>10</td><td>프로파일 리포트 주기 (s).</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="spill">Spill (디스크 보조)</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_spill</code></td><td>false</td><td>큰 연산자 디스크 spill 활성.</td></tr>
+        <tr><td><code>spill_mode</code></td><td>auto</td><td>auto / force.</td></tr>
+        <tr><td><code>spill_storage_limit</code></td><td>—</td><td>spill 디스크 사용 한도.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="misc">기타</h2>
+    <table>
+      <thead><tr><th>변수</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>time_zone</code></td><td>system</td><td>세션 타임존. 'Asia/Seoul' 등.</td></tr>
+        <tr><td><code>sql_mode</code></td><td></td><td>'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES' 등.</td></tr>
+        <tr><td><code>character_set_results</code></td><td>utf8mb4</td><td>결과 인코딩.</td></tr>
+        <tr><td><code>query_cache_size</code></td><td>0</td><td>FE 쿼리 캐시 크기.</td></tr>
+        <tr><td><code>resource_group</code></td><td>—</td><td>현재 세션 Resource Group.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="apply">자주 쓰는 조합</h2>
+<pre><code>-- 분석가 워크벤치 (큰 쿼리도 안전하게)
+SET pipeline_dop = 0;
+SET parallel_fragment_exec_instance_num = 8;
+SET query_mem_limit = 32 * 1024 * 1024 * 1024;
+SET enable_spill = true;
+SET enable_profile = true;
+
+-- BI 대시보드 (낮은 지연 우선)
+SET query_timeout = 30;
+SET query_mem_limit = 8 * 1024 * 1024 * 1024;
+SET enable_materialized_view_rewrite = true;</code></pre>
+
+    <h2 id="show">조회·검색</h2>
+<pre><code>SHOW VARIABLES;
+SHOW VARIABLES LIKE '%mv%';
+SHOW VARIABLES LIKE '%cache%';
+SELECT @@enable_pipeline_engine;</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>운영용 글로벌 변수는 <code>SET GLOBAL</code>로 박아두고 git에 SQL로 저장 (변경 이력 보존).</li>
+        <li>큰 ad-hoc 쿼리 사용자에게는 Resource Group + 세션 프로필을 미리 설정해서 자동 적용.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./admin-sql.html">← 운영 SQL</a>
+        <a href="./error-codes.html">다음 → 에러 메시지</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/reference/System_variable/" target="_blank" rel="noopener">docs.starrocks.io / System variables</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

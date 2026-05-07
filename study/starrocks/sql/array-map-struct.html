@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Array · Map · Struct — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-amp" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL / Array · Map · Struct</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL — Array · Map · Struct</h1>
+
+    <h2 id="array">ARRAY</h2>
+<pre><code>-- 컬럼 선언
+CREATE TABLE t (
+  id BIGINT,
+  tags ARRAY&lt;STRING&gt;,
+  scores ARRAY&lt;DOUBLE&gt;
+)
+PRIMARY KEY(id) DISTRIBUTED BY HASH(id);
+
+-- 리터럴
+SELECT [1,2,3], ARRAY[1,2,3];
+
+-- 길이 / 인덱싱(1-base)
+SELECT array_length(tags), tags[1];
+
+-- 자주 쓰는 함수
+SELECT array_contains(tags, 'a'),
+       array_position(tags, 'a'),
+       array_distinct(tags),
+       array_sort(tags),
+       array_concat(tags, ['x']),
+       array_intersect(tags, ['a','b']),
+       array_slice(tags, 1, 3);
+
+-- 람다 기반
+SELECT array_filter(scores, x -&gt; x &gt; 50),
+       array_map(scores, x -&gt; x * 2),
+       array_sum(scores),
+       array_avg(scores);</code></pre>
+
+    <h2 id="unnest">UNNEST — 배열을 행으로</h2>
+<pre><code>SELECT t.id, tag
+FROM t, UNNEST(t.tags) AS u(tag);
+
+-- 다중 컬럼 동시 unnest
+SELECT t.id, tag, score
+FROM t, UNNEST(t.tags, t.scores) AS u(tag, score);</code></pre>
+
+    <h2 id="map">MAP</h2>
+<pre><code>CREATE TABLE m (
+  id BIGINT,
+  attrs MAP&lt;STRING, STRING&gt;
+);
+
+-- 리터럴
+SELECT map{'a':'1','b':'2'};
+
+-- 접근
+SELECT attrs['name'];
+SELECT map_keys(attrs), map_values(attrs);
+SELECT map_size(attrs);
+
+-- map → 행
+SELECT id, k, v
+FROM m, UNNEST(map_keys(attrs), map_values(attrs)) AS u(k, v);</code></pre>
+
+    <h2 id="struct">STRUCT</h2>
+<pre><code>CREATE TABLE s (
+  id BIGINT,
+  addr STRUCT&lt;city STRING, zip STRING&gt;
+);
+
+-- 접근
+SELECT addr.city, addr.zip FROM s;
+
+-- 리터럴
+SELECT named_struct('city','Seoul','zip','06000');
+SELECT row('Seoul','06000');</code></pre>
+
+    <h2 id="lateral">LATERAL JOIN (UNNEST 포함)</h2>
+<pre><code>SELECT t.id, x.tag, x.idx
+FROM t,
+     LATERAL (SELECT tag, ordinal AS idx
+              FROM UNNEST(t.tags) WITH ORDINALITY u(tag, ordinal)) x;</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>이벤트 페이로드의 다중 태그/속성을 행으로 풀어보고 싶을 때 ARRAY + UNNEST가 가장 자연스럽습니다.</li>
+        <li>큰 ARRAY(수백 원소+)는 압축률·쿼리 비용 모두 부담 — 가능하면 정규화하거나 핵심 키만 컬럼화.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./json.html">← JSON</a>
+        <a href="./gis.html">다음 → GIS</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/array-functions/" target="_blank" rel="noopener">docs.starrocks.io / Array functions</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

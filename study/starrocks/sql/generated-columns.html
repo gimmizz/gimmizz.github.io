@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generated Columns — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-gen" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL / Generated Columns</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL — Generated Columns</h1>
+
+    <p>다른 컬럼의 표현식으로 자동 계산되는 컬럼. JSON/날짜 추출 등을 적재 단계에서 컬럼화하면 쿼리·인덱스 가속에 유리.</p>
+
+    <h2 id="syntax">선언</h2>
+<pre><code>CREATE TABLE event_log (
+  event_id   BIGINT NOT NULL,
+  ts         DATETIME NOT NULL,
+  payload    JSON,
+  -- 표현식 기반 컬럼 (저장됨)
+  dt         DATE   AS (CAST(ts AS DATE)),
+  user_id    BIGINT AS (get_json_int(payload, '$.user_id')),
+  event_type VARCHAR(32) AS (get_json_string(payload, '$.type'))
+)
+DUPLICATE KEY(event_id, ts)
+PARTITION BY dt
+DISTRIBUTED BY HASH(user_id)
+PROPERTIES ("replication_num" = "3");</code></pre>
+
+    <p>적재할 때는 <strong>입력 컬럼만 적재</strong>하면 된다 — generated 컬럼은 자동 계산.</p>
+<pre><code>INSERT INTO event_log (event_id, ts, payload) VALUES
+  (1, '2026-05-07 10:00:00', '{"user_id":100,"type":"view"}');
+-- dt, user_id, event_type 자동 채워짐</code></pre>
+
+    <h2 id="why">왜 쓰나</h2>
+    <ul>
+      <li><strong>파티션 키로 사용</strong> — payload 안의 dt를 추출해 파티션 키로 쓸 수 있다.</li>
+      <li><strong>인덱스 부착</strong> — generated 컬럼에 Bitmap/Bloom 인덱스를 걸어 가속.</li>
+      <li><strong>쿼리 단순화</strong> — JSON 추출을 매번 쓰지 않아도 됨.</li>
+      <li><strong>일관성</strong> — 정의가 스키마에 박혀 있어 모든 쓰기가 같은 규칙.</li>
+    </ul>
+
+    <h2 id="alter">ALTER로 추가</h2>
+<pre><code>ALTER TABLE event_log
+  ADD COLUMN region VARCHAR(8) AS (get_json_string(payload, '$.region'));</code></pre>
+
+    <h2 id="caveats">제약</h2>
+    <ul>
+      <li>generated 컬럼은 <strong>읽기 전용</strong>: 직접 INSERT/UPDATE 못 함 (입력 컬럼이 결정).</li>
+      <li>표현식은 <strong>결정적(deterministic)</strong>이어야 — <code>now()</code>, <code>rand()</code> 등은 사용 불가.</li>
+      <li>표현식 내부의 입력 컬럼이 ALTER로 바뀌면 재계산이 필요할 수 있음.</li>
+      <li>UDF를 generated 표현식에 쓰려면 추가 검증 필요.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>JSON payload를 받는 이벤트 테이블에서 가장 가치가 큼. 자주 조회되는 키를 generated 컬럼으로 미리 빼두면 쿼리 비용/인덱스 효과가 크게 향상.</li>
+        <li>같은 효과를 ETL에서 미리 컬럼화해도 OK이지만, generated 컬럼은 ETL 변경 없이 스키마만 손대면 되어 운영 부담이 작음.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./udf.html">← UDF</a>
+        <a href="./mysql-compat.html">다음 → MySQL 호환성</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-statements/data-definition/CREATE_TABLE/" target="_blank" rel="noopener">docs.starrocks.io / CREATE TABLE</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

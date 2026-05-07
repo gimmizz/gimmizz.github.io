@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UDF (Java · Python) — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-udf" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL / UDF</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL — UDF (User-Defined Function)</h1>
+
+    <p>표준 함수로 처리하기 어려운 변환·검증·암호화 등은 UDF로. StarRocks는 Java UDF(스칼라/UDAF/UDTF) 그리고 v3.x부터 Python UDF(스칼라)를 지원.</p>
+
+    <h2 id="java-scalar">Java 스칼라 UDF</h2>
+<pre><code>// 1) Java 코드
+package com.example.sr;
+public class AddOne {
+  public Integer evaluate(Integer x) {
+    if (x == null) return null;
+    return x + 1;
+  }
+}
+// 2) Maven으로 jar 빌드 → S3/HDFS/HTTP에 업로드</code></pre>
+<pre><code>-- 3) 등록
+CREATE FUNCTION add_one(INT) RETURNS INT
+PROPERTIES (
+  "type"     = "StarrocksJar",
+  "file"     = "http://internal/sr-udf/add-one-1.0.jar",
+  "symbol"   = "com.example.sr.AddOne",
+  "object_file" = "..."
+);
+
+SELECT add_one(10);   -- 11</code></pre>
+
+    <h2 id="java-udaf">Java UDAF (집계)</h2>
+<pre><code>public class MyAvg {
+  public static class State {
+    public long count;
+    public double sum;
+  }
+  public State create()                              { return new State(); }
+  public void   destroy(State s)                     {}
+  public void   update(State s, Double v)            { if (v != null) { s.count++; s.sum += v; } }
+  public void   merge(State s, State other)          { s.count += other.count; s.sum += other.sum; }
+  public Double finalize(State s)                    { return s.count == 0 ? null : s.sum / s.count; }
+  public void   serialize(State s, java.nio.ByteBuffer buf) { ... }
+  public void   deserialize(State s, java.nio.ByteBuffer buf) { ... }
+}</code></pre>
+<pre><code>CREATE AGGREGATE FUNCTION my_avg(DOUBLE) RETURNS DOUBLE
+PROPERTIES (...);
+SELECT my_avg(amount) FROM orders;</code></pre>
+
+    <h2 id="java-udtf">Java UDTF (테이블 함수)</h2>
+    <p>한 행을 여러 행으로 펼치는 함수. <code>process</code>가 여러 번 emit.</p>
+<pre><code>public class Split {
+  public Iterator&lt;String&gt; process(String s, String sep) {
+    if (s == null) return Collections.emptyIterator();
+    return Arrays.asList(s.split(sep)).iterator();
+  }
+}</code></pre>
+
+    <h2 id="python">Python UDF (스칼라)</h2>
+<pre><code>CREATE FUNCTION add_one(INT) RETURNS INT
+PROPERTIES (
+  "type"   = "Python",
+  "symbol" = "add_one",
+  "input"  = "scalar",
+  "file"   = "http://internal/sr-udf/add_one.py"
+);
+
+-- add_one.py
+def add_one(x):
+    return None if x is None else x + 1</code></pre>
+
+    <h2 id="ops">관리</h2>
+<pre><code>SHOW FUNCTIONS;
+DROP FUNCTION add_one(INT);
+
+-- 글로벌 함수 (DB 무관)
+CREATE GLOBAL FUNCTION ...;</code></pre>
+
+    <h2 id="caveats">주의</h2>
+    <ul>
+      <li><strong>성능 페널티</strong>: 네이티브 벡터화에 비해 UDF는 행 단위로 호출 → 수백 배 느릴 수 있음. 큰 데이터에는 가급적 표준 함수.</li>
+      <li><strong>JAR 배포</strong>: 모든 BE에서 다운로드 가능한 위치에. file:// 사용 시 모든 BE에 같은 경로로 배포.</li>
+      <li><strong>JVM</strong>: BE의 <code>JAVA_HOME</code>이 JDK여야 (JRE 아님).</li>
+      <li><strong>보안</strong>: UDF는 BE 프로세스 권한으로 실행 — 신뢰된 코드만.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>UDF는 가능한 한 SQL/표준 함수로 풀고, 정말 필요한 경우만 도입. 운영 부담(JAR 배포·버전 관리)이 작지 않음.</li>
+        <li>해시·암호화·검증 같은 컴팩트한 변환은 Python UDF가 빠르게 작성 가능하지만, 운영용 큰 트래픽은 Java UDF가 더 안정적.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./gis.html">← GIS</a>
+        <a href="./generated-columns.html">다음 → Generated Columns</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/JAVA_UDF/" target="_blank" rel="noopener">docs.starrocks.io / Java UDF</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

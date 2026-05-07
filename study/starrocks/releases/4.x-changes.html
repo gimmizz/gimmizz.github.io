@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>4.x 주요 변경 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="rel-4x" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 릴리스 / 4.x 주요 변경</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>4.x 주요 변경 사항</h1>
+
+    <div class="callout note">
+      <div class="callout-title">💡 정확한 변경 내역</div>
+      <p>이 페이지는 운영 관점에서 영향이 큰 변경을 모았습니다. 전체 릴리스 노트는
+      <a href="https://docs.starrocks.io/docs/release_notes/" target="_blank" rel="noopener">공식 release notes</a>를 참고하세요.</p>
+    </div>
+
+    <h2 id="4-1">4.1</h2>
+    <ul>
+      <li>외부 카탈로그 Query Rewrite 안정화 — Hive/Iceberg 베이스 MV가 더 적극적으로 자동 사용.</li>
+      <li>Iceberg/Delta Time Travel 안정화 + Equality Delete 처리 강화.</li>
+      <li>Routine Load 성능/안정성 개선.</li>
+      <li>Shared-data 모드: 캐시 적중률·콜드 스타트 개선.</li>
+      <li>Pipeline 엔진 추가 최적화.</li>
+    </ul>
+
+    <h2 id="4-0">4.0</h2>
+    <ul>
+      <li><strong>JDK 17 권장</strong> — 이전 JDK 11도 동작은 하나 권장 라인이 17로 이동.</li>
+      <li>Async MV의 Query Rewrite 기본 활성 + 외부 카탈로그 베이스 MV 안정화.</li>
+      <li>Storage Volume 개념 도입(Shared-data 모드 표준화).</li>
+      <li>인증·인가 RBAC 깊이 강화 (DB·Catalog 단위 권한).</li>
+      <li>Inverted Index / N-Gram Bloom Filter 정식 지원.</li>
+      <li>Routine Load의 backpressure 처리 개선.</li>
+      <li>FQDN 모드 안정화 (K8s 친화).</li>
+    </ul>
+
+    <h2 id="features-since-4">v3 → v4에서 새로 들어온 기능 정리</h2>
+    <table>
+      <thead><tr><th>영역</th><th>새 기능</th></tr></thead>
+      <tbody>
+        <tr><td>스토리지</td><td>Shared-data 모드, Storage Volume, datacache_disk_path</td></tr>
+        <tr><td>Catalog</td><td>Unified Catalog, REST Iceberg, Paimon, Kudu, MaxCompute</td></tr>
+        <tr><td>MV</td><td>외부 카탈로그 MV, force_external_table_query_rewrite, partition_refresh_number</td></tr>
+        <tr><td>SQL</td><td>JSON 타입, Generated Columns, AUTO_INCREMENT, Primary Key UPDATE</td></tr>
+        <tr><td>인덱스</td><td>N-Gram Bloom, Inverted Index</td></tr>
+        <tr><td>운영</td><td>Resource Group, audit_loader, masking/row policy</td></tr>
+        <tr><td>K8s</td><td>Operator + Helm chart 안정화</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="breaking">호환성 깨진 변경 (운영 영향)</h2>
+    <ul>
+      <li>일부 시스템 변수 기본값 조정 — 업그레이드 후 <code>SHOW VARIABLES</code>로 차이 검증 권장.</li>
+      <li>JDK 11 이하 환경은 4.x에서 권장 X.</li>
+      <li>일부 deprecated 함수가 실제로 제거 (예: 일부 구 SQL 함수). 운영 SQL 점검 필요.</li>
+      <li>RBAC 모델 변경으로 v2.x 시절의 일부 권한 부여 방식이 달라짐.</li>
+    </ul>
+
+    <h2 id="check">자기 클러스터의 버전 확인</h2>
+<pre><code>SELECT version();
+SHOW FRONTENDS;     -- Version 컬럼
+SHOW BACKENDS;      -- Version 컬럼</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>새 클러스터는 4.x로 시작이 표준. JDK 17 + 메이저 라인 4.x 고정.</li>
+        <li>마이너 패치(4.1.x)는 비교적 자주 나오니 분기에 한 번 정도는 검토하고 적용 일정을 잡는 게 좋음.</li>
+        <li>릴리스 노트의 "Behavior change" 섹션은 매번 정독 — 가장 큰 사고가 여기서 옴.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="../cheatsheet/error-codes.html">← 에러 코드</a>
+        <a href="./3.x-to-4.x.html">다음 → 3.x → 4.x 업그레이드</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/release_notes/" target="_blank" rel="noopener">docs.starrocks.io / Release notes</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

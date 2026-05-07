@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>6-5. Unified Catalog — StarRocks 가이드</title>
+  <title>Unified Catalog — StarRocks 가이드</title>
   <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
@@ -11,31 +11,155 @@
   <aside class="sidebar" data-active="catalog-unified" data-base="../"></aside>
   <main class="content">
     <header class="page-header">
-      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-5. Unified</span>
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / Unified</span>
       <span>최종 갱신: 2026-05-07</span>
     </header>
 
-    <h1>6-5. Unified Catalog (v3.2+)</h1>
+    <h1>Unified Catalog (v3.2+)</h1>
 
     <div class="callout tip">
       <div class="callout-title">📌 한 줄 요약</div>
-      <p>한 메타스토어에 Hive parquet, Iceberg, Hudi, Delta 테이블이 섞여 있을 때 카탈로그 4개를 따로 만들지 않고
-      하나로 묶어서 다룰 수 있다. StarRocks가 테이블 형식을 자동 인식.</p>
+      <p>한 메타스토어 + 한 스토리지에 <strong>Hive · Iceberg · Hudi · Delta · Paimon · Kudu</strong> 형식이 섞여 있어도
+      카탈로그 하나로 묶어 다룰 수 있다. StarRocks가 테이블 형식을 자동 인식해 적절한 리더를 사용.</p>
     </div>
 
-    <h2 id="basic">기본 PROPERTIES</h2>
-<pre><code>CREATE EXTERNAL CATALOG unified
-PROPERTIES (
-  "type"                   = "unified",
-  "unified.metastore.type" = "hive",        -- "hive" | "glue"
-  "hive.metastore.uris"    = "thrift://hms.example.com:9083",
-  "aws.s3.endpoint"        = "https://minio.internal:9000",
-  "aws.s3.access_key"      = "...",
-  "aws.s3.secret_key"      = "...",
-  "aws.s3.enable_path_style_access" = "true"
-);</code></pre>
+    <h2 id="supported">지원 형식</h2>
+    <ul>
+      <li>Apache Hive</li>
+      <li>Apache Iceberg</li>
+      <li>Apache Hudi</li>
+      <li>Delta Lake</li>
+      <li>Apache Paimon</li>
+      <li>Apache Kudu</li>
+    </ul>
+    <div class="callout warn">
+      <div class="callout-title">⚠️ 핵심 제약</div>
+      <p>한 Unified Catalog는 <strong>단일 메타스토어 + 단일 스토리지 시스템</strong>만 통합한다.
+      별도 HMS 또는 별도 스토리지(예: HDFS와 S3 동시)를 묶고 싶다면 카탈로그를 분리해야 한다.</p>
+    </div>
 
-    <h2 id="how">동작 방식</h2>
+    <h2 id="syntax">CREATE EXTERNAL CATALOG 구문</h2>
+<pre><code>CREATE EXTERNAL CATALOG &lt;catalog_name&gt;
+[COMMENT &lt;comment&gt;]
+PROPERTIES (
+  "type" = "unified",
+  -- MetastoreParams
+  -- StorageCredentialParams
+  -- MetadataUpdateParams
+  -- PaimonCatalogParams (Paimon 사용 시)
+  -- KuduCatalogParams (Kudu 사용 시)
+);</code></pre>
+    <p>이름은 문자/숫자/언더스코어 가능, 문자로 시작, 1023자 이내, 대소문자 구분.</p>
+
+    <h2 id="metastore">MetastoreParams — 메타스토어 옵션</h2>
+
+    <h3>Hive Metastore (HMS)</h3>
+<pre><code>"unified.metastore.type" = "hive",
+"hive.metastore.uris" = "thrift://hms1:9083,thrift://hms2:9083"
+-- HA: 콤마로 다중 URI</code></pre>
+
+    <h3>AWS Glue (S3 전용)</h3>
+<pre><code>-- Instance Profile
+"unified.metastore.type" = "glue",
+"aws.glue.use_instance_profile" = "true",
+"aws.glue.region" = "ap-northeast-2"
+
+-- Assumed Role
+"aws.glue.use_instance_profile" = "true",
+"aws.glue.iam_role_arn" = "arn:aws:iam::...:role/sr-glue"
+
+-- IAM User
+"aws.glue.use_instance_profile" = "false",
+"aws.glue.access_key" = "...",
+"aws.glue.secret_key" = "..."</code></pre>
+
+    <h2 id="storage">StorageCredentialParams — 스토리지 인증</h2>
+
+    <h3>HDFS</h3>
+<pre><code># 별도 자격증명 불필요. 다음 옵션이 필요할 수 있음:
+# - HADOOP_USER_NAME 환경변수
+# - HA: hdfs-site.xml 배포
+# - ViewFs: core-site.xml 배포
+
+# Kerberos
+kinit -kt /etc/security/keytabs/sr.keytab sr/_HOST@REALM
+# fe.conf / be.conf / cn.conf:
+JAVA_OPTS="$JAVA_OPTS -Djava.security.krb5.conf=/etc/krb5.conf"</code></pre>
+
+    <h3>AWS S3</h3>
+<pre><code>-- Instance Profile
+"aws.s3.use_instance_profile" = "true",
+"aws.s3.region" = "ap-northeast-2"
+
+-- Assumed Role
+"aws.s3.use_instance_profile" = "true",
+"aws.s3.iam_role_arn" = "arn:aws:iam::...:role/sr-s3"
+
+-- IAM User
+"aws.s3.use_instance_profile" = "false",
+"aws.s3.access_key" = "AKIA...",
+"aws.s3.secret_key" = "..."</code></pre>
+
+    <h3>S3 호환 (MinIO 등)</h3>
+<pre><code>"aws.s3.enable_ssl" = "false",
+"aws.s3.enable_path_style_access" = "true",
+"aws.s3.endpoint" = "http://minio.internal:9000",
+"aws.s3.access_key" = "minio",
+"aws.s3.secret_key" = "..."</code></pre>
+
+    <h3>Azure Blob</h3>
+<pre><code>-- Shared Key
+"azure.blob.storage_account" = "myacct",
+"azure.blob.shared_key" = "..."
+
+-- SAS Token
+"azure.blob.storage_account" = "myacct",
+"azure.blob.container" = "warehouse",
+"azure.blob.sas_token" = "..."</code></pre>
+
+    <h3>Azure Data Lake Gen2</h3>
+<pre><code>-- Managed Identity
+"azure.adls2.oauth2_use_managed_identity" = "true",
+"azure.adls2.oauth2_tenant_id" = "...",
+"azure.adls2.oauth2_client_id" = "..."
+
+-- Service Principal
+"azure.adls2.oauth2_client_id" = "...",
+"azure.adls2.oauth2_client_secret" = "...",
+"azure.adls2.oauth2_client_endpoint" = "..."
+
+-- Workload Identity
+"azure.adls2.oauth2_token_file" = "/var/run/secrets/...",
+"azure.adls2.oauth2_tenant_id" = "...",
+"azure.adls2.oauth2_client_id" = "..."</code></pre>
+
+    <h3>Google GCS</h3>
+<pre><code>-- VM 기반
+"gcp.gcs.use_compute_engine_service_account" = "true"
+
+-- Service Account
+"gcp.gcs.service_account_email" = "...",
+"gcp.gcs.service_account_private_key_id" = "...",
+"gcp.gcs.service_account_private_key" = "..."
+
+-- 가정(Impersonation)
+"gcp.gcs.use_compute_engine_service_account" = "true",
+"gcp.gcs.impersonation_service_account" = "..."</code></pre>
+
+    <h2 id="cache">MetadataUpdateParams — 메타데이터 캐시</h2>
+    <table>
+      <thead><tr><th>파라미터</th><th>기본</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_metastore_cache</code></td><td>true</td><td>메타스토어 캐싱 활성</td></tr>
+        <tr><td><code>enable_remote_file_cache</code></td><td>true</td><td>원격 파일 메타 캐싱</td></tr>
+        <tr><td><code>metastore_cache_refresh_interval_sec</code></td><td>7200</td><td>메타스토어 갱신 주기 (초)</td></tr>
+        <tr><td><code>remote_file_cache_refresh_interval_sec</code></td><td>60</td><td>파일 메타 갱신 주기</td></tr>
+        <tr><td><code>metastore_cache_ttl_sec</code></td><td>86400</td><td>메타 캐시 TTL (24h)</td></tr>
+        <tr><td><code>remote_file_cache_ttl_sec</code></td><td>129600</td><td>파일 메타 TTL (36h)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="routing">자동 포맷 라우팅 동작</h2>
 <div class="mermaid">
 graph LR
   SQL["SELECT ... FROM unified.db.tbl"]
@@ -45,33 +169,133 @@ graph LR
   I["Iceberg Reader"]
   HU["Hudi Reader"]
   D["Delta Reader"]
+  P["Paimon Reader"]
+  K["Kudu Reader"]
   SQL --> FE --> HMS
-  FE -- "tbl이 Iceberg 형식이면" --> I
-  FE -- "tbl이 Hudi 형식이면" --> HU
-  FE -- "tbl이 Delta 형식이면" --> D
-  FE -- "그 외" --> H
+  FE -- "table_type=ICEBERG" --> I
+  FE -- "table_type=HUDI"    --> HU
+  FE -- "table_type=DELTA"   --> D
+  FE -- "Paimon 메타"        --> P
+  FE -- "Kudu master 매핑"   --> K
+  FE -- "그 외(Hive parquet/orc/text)" --> H
 </div>
-<p class="diagram-caption">그림 6-5-1. Unified Catalog의 자동 포맷 라우팅</p>
+    <p>HMS의 테이블 프로퍼티(예: <code>table_type=ICEBERG</code>) 또는 메타 시그니처를 보고 형식을 결정한다. 따라서 <strong>HMS의 메타 정합성</strong>이 매우 중요.</p>
+
+    <h2 id="dml">쓰기 지원 (형식별 차이)</h2>
+    <table>
+      <thead><tr><th>작업</th><th>지원 형식</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>SELECT</td><td>모든 형식</td><td>—</td></tr>
+        <tr><td>CREATE/DROP DATABASE</td><td>Hive, Iceberg</td><td>나머지는 외부 도구로</td></tr>
+        <tr><td>CREATE TABLE</td><td>Hive, Iceberg</td><td><code>ENGINE = hive</code> 또는 <code>iceberg</code></td></tr>
+        <tr><td>DROP TABLE</td><td>Hive, Iceberg</td><td>—</td></tr>
+        <tr><td>INSERT INTO / OVERWRITE</td><td>Hive, Iceberg (Parquet만)</td><td>ORC/CSV/Avro 쓰기는 미지원</td></tr>
+        <tr><td>REFRESH EXTERNAL TABLE</td><td>Hive, Hudi</td><td>—</td></tr>
+        <tr><td>Time Travel</td><td>Iceberg, Delta</td><td>형식별 본 페이지 참고</td></tr>
+      </tbody>
+    </table>
+
+<pre><code>-- Hive 테이블 생성
+CREATE TABLE unified.dwh.summary (
+  channel STRING, cnt BIGINT, dt DATE
+)
+ENGINE = hive
+PARTITION BY (dt);
+
+-- Iceberg 테이블 생성
+CREATE TABLE unified.dwh.events_iceberg (
+  event_time TIMESTAMP, user_id BIGINT, event_type STRING, dt DATE
+)
+ENGINE = iceberg
+PARTITION BY (dt);
+
+-- INSERT (Parquet만)
+INSERT INTO unified.dwh.summary SELECT channel, count(*), '2026-05-07' FROM ...;</code></pre>
+
+    <h2 id="grant">권한 (RBAC)</h2>
+<pre><code>GRANT USAGE ON CATALOG unified TO ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN ALL DATABASES IN CATALOG unified TO ROLE bi_reader;
+
+GRANT CREATE DATABASE ON CATALOG unified TO ROLE etl_writer;
+GRANT CREATE TABLE ON DATABASE unified.dwh TO ROLE etl_writer;
+GRANT INSERT ON TABLE unified.dwh.events_iceberg TO ROLE etl_writer;</code></pre>
+
+    <h2 id="examples">실제 예시 모음</h2>
+
+    <h3>예 1 — HDFS + HMS</h3>
+<pre><code>CREATE EXTERNAL CATALOG unified
+PROPERTIES (
+  "type" = "unified",
+  "unified.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms1:9083,thrift://hms2:9083"
+);</code></pre>
+
+    <h3>예 2 — MinIO + HMS</h3>
+<pre><code>CREATE EXTERNAL CATALOG unified
+PROPERTIES (
+  "type" = "unified",
+  "unified.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms.internal:9083",
+  "aws.s3.enable_path_style_access" = "true",
+  "aws.s3.endpoint" = "http://minio.internal:9000",
+  "aws.s3.access_key" = "...",
+  "aws.s3.secret_key" = "..."
+);</code></pre>
+
+    <h3>예 3 — AWS S3 + Glue</h3>
+<pre><code>CREATE EXTERNAL CATALOG unified_glue
+PROPERTIES (
+  "type" = "unified",
+  "unified.metastore.type" = "glue",
+  "aws.glue.use_instance_profile" = "true",
+  "aws.glue.region" = "ap-northeast-2",
+  "aws.s3.use_instance_profile" = "true",
+  "aws.s3.region" = "ap-northeast-2"
+);</code></pre>
+
+    <h2 id="ops">기본 작업 흐름</h2>
+<pre><code>SHOW CATALOGS;
+SET CATALOG unified;
+SHOW DATABASES;
+USE dwh;
+SELECT * FROM events LIMIT 10;
+
+-- 형식 확인 (어떤 reader가 쓰일지)
+DESC events;
+SHOW CREATE TABLE events;
+
+-- 메타 새로고침
+REFRESH CATALOG unified;
+REFRESH EXTERNAL TABLE unified.dwh.events;
+REFRESH EXTERNAL TABLE unified.dwh.events PARTITION (dt='2026-05-07');
+
+DROP CATALOG unified;</code></pre>
 
     <h2 id="caveats">주의사항</h2>
     <ul>
-      <li>모든 테이블이 같은 인증/스토리지 자격을 공유 — 권한 분리가 필요한 경우 별도 카탈로그가 더 적합.</li>
-      <li>형식별 고급 기능(Iceberg Time Travel, Hudi Incremental Query 등)은 그대로 사용 가능.</li>
-      <li>HMS의 테이블 프로퍼티(`table_type=ICEBERG` 등)에 의존해 형식을 결정하므로 메타 정합성이 중요.</li>
+      <li><strong>단일 스토리지·메타스토어 제약</strong>: 다른 HMS/스토리지를 추가하려면 별도 카탈로그.</li>
+      <li><strong>모든 테이블이 같은 자격증명 공유</strong>: 권한 분리가 필요한 데이터(PII 등)는 별도 카탈로그.</li>
+      <li><strong>HMS 메타 정합성</strong>: <code>table_type</code> 프로퍼티가 잘못되면 라우팅 실패.</li>
+      <li><strong>형식별 고급 기능</strong>(Iceberg Time Travel, Hudi Incremental Query 등)은 Unified를 통해도 그대로 사용 가능.</li>
+      <li><strong>쓰기는 Hive/Iceberg + Parquet</strong>만. 그 외는 원천 시스템에서 적재.</li>
+      <li><strong>Beta/안정화 단계</strong>: 프로덕션 적용 전 PoC 필수.</li>
     </ul>
 
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
       <ul>
-        <li>HMS 안에 다양한 포맷이 섞여 있고, BI/분석가에게 카탈로그 이름을 단순하게 노출하고 싶다면 1순위.</li>
-        <li>다만 권한·보안 정책이 달라야 하는 데이터(예: PII 테이블)는 별도 카탈로그로 분리하는 게 깔끔.</li>
+        <li>HMS 안에 Hive parquet과 Iceberg가 섞여 있는 게 일반적이라면 <strong>처음부터 Unified로 시작</strong>이 깔끔. BI/분석가에게도 카탈로그 이름이 하나로 보여 혼란이 적음.</li>
+        <li>같은 HMS·스토리지지만 <strong>권한 정책이 다른 데이터셋</strong>(PII 등)은 별도 카탈로그로 분리.</li>
+        <li>BE에 Data Cache 활성 + 1개 SSD 전용으로 두면 외부 카탈로그 쿼리가 내부 테이블 수준 응답속도. (<a href="./hive.html#datacache">Hive 페이지의 Data Cache 섹션</a> 참고)</li>
+        <li>HMS 메타 캐시 갱신 주기(7200초)는 운영에서 너무 길면 새 파티션 인식이 늦음 — 적재 직후 <code>REFRESH EXTERNAL TABLE</code>를 ETL 끝에 명시적으로 실행하는 패턴이 안전.</li>
+        <li>v3.2 도입 후 빠르게 발전 중인 영역 — 사용 버전 릴리스 노트의 Behavior change 항목을 매번 확인.</li>
       </ul>
     </div>
 
     <footer class="page-footer">
       <div class="nav-links">
-        <a href="./delta.html">← 6-4. Delta</a>
-        <a href="./jdbc-mysql.html">다음 → 6-6. JDBC</a>
+        <a href="./delta.html">← Delta</a>
+        <a href="./jdbc-mysql.html">다음 → JDBC</a>
       </div>
       <div>
         <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/unified_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Unified catalog</a></p>

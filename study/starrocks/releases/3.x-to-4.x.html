@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3.x → 4.x 업그레이드 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="rel-3to4" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 릴리스 / 3.x → 4.x</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>3.x → 4.x 업그레이드 체크리스트</h1>
+
+    <div class="callout warn">
+      <div class="callout-title">⚠️ 메이저 점프 주의</div>
+      <p>3.x 라인이 너무 오래된(예: 3.1) 경우 한 번에 4.x로 가기보다 <strong>3.5 또는 3.6 LTS를 거쳐</strong> 단계적으로 가는 게 안전.
+      메타 호환성·deprecated 함수 정리에 시간이 필요.</p>
+    </div>
+
+    <h2 id="prep">사전 준비 (D-7 ~ D-1)</h2>
+    <ol>
+      <li><strong>릴리스 노트 정독</strong> — Behavior change 섹션 집중.</li>
+      <li><strong>JDK 17 준비</strong> — 모든 FE/BE 노드에 설치, JAVA_HOME 점검.</li>
+      <li><strong>FE 메타데이터 백업</strong> — <code>tar czf fe-meta-$(date).tgz fe/meta</code>.</li>
+      <li><strong>핵심 마트 BACKUP SNAPSHOT</strong> — 최소 직전 1주.</li>
+      <li><strong>회귀 테스트 SQL 모음</strong> — 자주 도는 BI/ETL SQL 30~50개를 골라 결과 hash 저장.</li>
+      <li><strong>새 버전 바이너리 배포</strong> — 모든 PM에 사전 unpack (Ansible).</li>
+      <li><strong>Deprecated 함수 점검</strong> — audit log 또는 리뷰로.</li>
+      <li><strong>변경 PROPERTIES 검토</strong> — replication_num, enable_persistent_index 등.</li>
+      <li><strong>알람 일시 무음</strong> — 업그레이드 윈도 동안.</li>
+      <li><strong>롤백 계획</strong> — 이전 버전 바이너리 위치 + 스위칭 절차.</li>
+    </ol>
+
+    <h2 id="order">업그레이드 순서 (총 1~3시간)</h2>
+<div class="mermaid">
+graph LR
+  A["Observer (있으면)<br/>1대씩"] --> B["Follower<br/>1대씩"] --> C["Leader<br/>마지막"] --> D["BE 1~2대씩<br/>롤링"]</div>
+
+    <h3>FE</h3>
+    <ol>
+      <li>Observer FE → Follower FE → Leader FE 순으로 1대씩.</li>
+      <li>각 FE: <code>stop_fe.sh</code> → 새 버전 디렉터리로 심볼릭 링크 변경 → JDK 17 환경변수 → <code>start_fe.sh --daemon</code>.</li>
+      <li>다음 FE 진행 전 <code>SHOW FRONTENDS</code>에서 alive·version 확인.</li>
+    </ol>
+
+    <h3>BE</h3>
+    <ol>
+      <li>한 번에 1~2대씩만 (Tablet 3복제 안전).</li>
+      <li>각 BE: <code>stop_be.sh</code> → 새 버전 → <code>start_be.sh --daemon</code>.</li>
+      <li>다음 BE 진행 전 <code>SHOW BACKENDS</code>에서 alive + clone queue 비워짐 확인:
+<pre><code>SELECT count(*) FROM information_schema.tablet_schedules
+WHERE state IN ('PENDING','RUNNING');</code></pre>
+      </li>
+    </ol>
+
+    <h2 id="verify">사후 검증</h2>
+    <ol>
+      <li><strong>버전 확인</strong>: <code>SELECT version();</code> 모든 FE/BE.</li>
+      <li><strong>회귀 SQL</strong>: 사전에 모은 30~50개 SQL 결과 hash 비교.</li>
+      <li><strong>Routine Load</strong>: <code>SHOW ROUTINE LOAD</code> RUNNING 확인.</li>
+      <li><strong>MV</strong>: <code>SHOW MATERIALIZED VIEWS</code>의 is_active / last_refresh_state.</li>
+      <li><strong>Grafana</strong>: p99 query latency, BE memory, compaction score 추적.</li>
+      <li><strong>외부 카탈로그</strong>: 핵심 카탈로그에서 SELECT 1개씩 — 메타 호환 확인.</li>
+    </ol>
+
+    <h2 id="known">자주 만나는 이슈</h2>
+    <table>
+      <thead><tr><th>이슈</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td>JDK 11에 막힌 FE 부트</td><td>JDK 17로 변경. <code>JAVA_HOME</code>/<code>JAVA_OPTS</code> 점검</td></tr>
+        <tr><td>일부 SQL 함수 누락</td><td>대체 함수 또는 표현식으로 ETL 패치</td></tr>
+        <tr><td>RBAC 권한 변경 후 일부 사용자 SELECT 실패</td><td>새 권한 모델로 재부여 (CATALOG/DB/TABLE)</td></tr>
+        <tr><td>외부 카탈로그 메타 캐시 충돌</td><td><code>REFRESH CATALOG ...</code></td></tr>
+        <tr><td>MV INACTIVE 다수</td><td>원인 파악 후 ACTIVE; 정의 변경이 필요하면 DROP + CREATE</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="rollback">롤백</h2>
+    <ol>
+      <li>치명적 회귀 발견 시 — BE 한 대씩 이전 버전 심볼릭 링크로 교체 → 재기동.</li>
+      <li>FE도 동일. 단 메이저 다운그레이드(예: 4.0 → 3.5)는 메타 호환 문제 가능 — 가능하면 피한다.</li>
+      <li>최악의 경우: 업그레이드 직전 fe-meta 백업 복원 + 이전 버전 재기동.</li>
+    </ol>
+
+    <h2 id="window">윈도 산출 (약 20대 PM 기준)</h2>
+    <table>
+      <thead><tr><th>단계</th><th>예상 시간</th></tr></thead>
+      <tbody>
+        <tr><td>FE 3대 롤링</td><td>약 15~30분</td></tr>
+        <tr><td>BE 17대 (2대씩 묶어 9 라운드)</td><td>약 1~2시간 (Tablet 양에 따라)</td></tr>
+        <tr><td>회귀 검증</td><td>약 30분</td></tr>
+        <tr><td>합계</td><td>약 2~3시간</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>처음 메이저 업그레이드는 <strong>스테이징 클러스터에서 리허설</strong> 후 운영 적용.</li>
+        <li>업그레이드 직후 1주는 알람 임계값을 보수적으로(평소보다 민감) 설정.</li>
+        <li><a href="../ops/upgrade-runbook.html">OPS-3 업그레이드 절차서</a>의 일반 절차도 함께 참고.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./4.x-changes.html">← 4.x 변경</a>
+        <a href="../index.html">홈으로</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/administration/management/upgrade/" target="_blank" rel="noopener">docs.starrocks.io / Upgrade</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

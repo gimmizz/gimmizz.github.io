@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Routine Load 운영 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="ops-rl" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 운영 자동화 / Routine Load 운영</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Routine Load 운영 Runbook</h1>
+
+    <h2 id="states">잡 상태</h2>
+    <table>
+      <thead><tr><th>State</th><th>의미</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td>NEED_SCHEDULE</td><td>새로 만들어진 잡, 스케줄 대기</td><td>자동으로 RUNNING으로 진입</td></tr>
+        <tr><td>RUNNING</td><td>정상 적재 중</td><td>—</td></tr>
+        <tr><td>PAUSED</td><td>실패율 한도 도달 또는 수동 정지</td><td>원인 파악 후 RESUME</td></tr>
+        <tr><td>STOPPED</td><td>완전 종료 (재가동 불가)</td><td>새 잡 생성</td></tr>
+        <tr><td>CANCELLED</td><td>운영자가 취소</td><td>새 잡 생성</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="check">상태 확인</h2>
+<pre><code>SHOW ROUTINE LOAD;
+SHOW ROUTINE LOAD FOR mart.orders_cdc\G
+
+-- 최근 처리 통계 / 에러
+SHOW ROUTINE LOAD TASK FROM mart\G
+SHOW ROUTINE LOAD FOR mart.orders_cdc;
+-- ErrorLogUrl 필드 → 실패 행 확인</code></pre>
+
+    <h2 id="pause-resume">정지 / 재개 / 종료</h2>
+<pre><code>PAUSE  ROUTINE LOAD FOR mart.orders_cdc;
+RESUME ROUTINE LOAD FOR mart.orders_cdc;
+STOP   ROUTINE LOAD FOR mart.orders_cdc;</code></pre>
+
+    <h2 id="alter">잡 옵션 변경</h2>
+    <p>일반적으로 PAUSE 상태에서만 가능.</p>
+<pre><code>PAUSE ROUTINE LOAD FOR mart.orders_cdc;
+
+ALTER ROUTINE LOAD mart.orders_cdc
+PROPERTIES (
+  "max_batch_rows"     = "300000",
+  "max_batch_interval" = "10"
+)
+FROM kafka (
+  "kafka_partitions" = "0,1,2,3,4,5",
+  "kafka_offsets"    = "OFFSET_END,OFFSET_END,OFFSET_END,OFFSET_END,OFFSET_END,OFFSET_END"
+);
+
+RESUME ROUTINE LOAD FOR mart.orders_cdc;</code></pre>
+
+    <h2 id="offset">오프셋 리셋</h2>
+
+    <h3>처음부터 다시</h3>
+<pre><code># 1) 기존 잡 STOP
+STOP ROUTINE LOAD FOR mart.orders_cdc;
+
+# 2) 같은 이름으로 재생성 (kafka_offsets = OFFSET_BEGINNING)
+CREATE ROUTINE LOAD mart.orders_cdc ON orders ...
+FROM KAFKA (
+  "kafka_topic" = "cdc.orders",
+  "kafka_partitions" = "0,1,2,3",
+  "kafka_offsets" = "OFFSET_BEGINNING,OFFSET_BEGINNING,OFFSET_BEGINNING,OFFSET_BEGINNING"
+);</code></pre>
+
+    <h3>특정 시점부터</h3>
+<pre><code>"kafka_offsets" = "OFFSET_END,OFFSET_END,..."        -- 가장 최근부터
+"kafka_offsets" = "12345,12346,12347,12348"          -- 지정 offset</code></pre>
+
+    <h2 id="add-partition">새 Kafka 파티션 추가</h2>
+    <p>토픽이 파티션을 늘렸을 때:</p>
+<pre><code>PAUSE ROUTINE LOAD FOR mart.orders_cdc;
+
+ALTER ROUTINE LOAD mart.orders_cdc
+FROM kafka (
+  "kafka_partitions" = "0,1,2,3,4,5,6,7",          -- 새 파티션 포함
+  "kafka_offsets"    = "OFFSET_END,...,OFFSET_BEGINNING,OFFSET_BEGINNING"
+);
+
+RESUME ROUTINE LOAD FOR mart.orders_cdc;</code></pre>
+
+    <h2 id="error">자주 만나는 PAUSED 원인</h2>
+    <table>
+      <thead><tr><th>원인</th><th>증상</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>스키마 불일치</td><td>too many filtered rows</td><td>jsonpaths 점검, 컬럼 타입 확인</td></tr>
+        <tr><td>Broker 다운</td><td>Kafka 연결 실패</td><td>broker 복구 후 RESUME</td></tr>
+        <tr><td>Auth 만료</td><td>SASL 인증 실패</td><td>password/keytab 갱신</td></tr>
+        <tr><td>토픽 삭제</td><td>topic not found</td><td>STOP 후 새 잡</td></tr>
+        <tr><td>BE 메모리 부족</td><td>load mem limit exceeded</td><td>batch 크기 ↓, 다른 잡 정리</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="alarm">알람 권장</h2>
+<pre><code>-- PAUSED 잡 검출 (5분마다 cron)
+SELECT name, state, error_log_urls
+FROM information_schema.routine_loads
+WHERE state = 'PAUSED';</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>잡당 Kafka 파티션 수는 BE 수와 비슷하거나 그 배수일 때 안정적.</li>
+        <li>label 충돌 방지를 위해 잡 이름은 <code>{db}.{table}_kafka_{topic}</code> 형식으로 표준화.</li>
+        <li>PAUSED 알람을 안 거는 건 사고. 거의 모든 운영 사고가 여기서 시작.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./backup-runbook.html">← 백업 절차서</a>
+        <a href="./schema-evolution.html">다음 → 스키마 진화</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/RoutineLoad/" target="_blank" rel="noopener">docs.starrocks.io / Routine Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

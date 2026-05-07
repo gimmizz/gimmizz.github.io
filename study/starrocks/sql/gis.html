@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GIS · 공간 함수 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="sql-gis" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / SQL / GIS · 공간</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>SQL — GIS · 공간 함수</h1>
+
+    <p>StarRocks는 OGC SFS 스타일의 기본 공간 함수를 지원한다. PostGIS 수준의 깊이는 아니지만 거리/포함/생성에는 충분.</p>
+
+    <h2 id="construct">생성</h2>
+<pre><code>SELECT ST_Point(127.0, 37.5);                    -- 경도, 위도
+SELECT ST_GeometryFromText('POINT(127.0 37.5)');
+SELECT ST_GeometryFromText('LINESTRING(0 0, 1 1, 2 2)');
+SELECT ST_GeometryFromText('POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))');
+SELECT ST_Circle(127.0, 37.5, 1000);             -- 반경(미터)</code></pre>
+
+    <h2 id="io">텍스트 변환</h2>
+<pre><code>SELECT ST_AsText(geom);                          -- WKT
+SELECT ST_AsBinary(geom);                        -- WKB
+SELECT ST_GeometryFromText('POINT(127 37)');</code></pre>
+
+    <h2 id="metric">측정·관계</h2>
+<pre><code>SELECT ST_Distance_Sphere(lon1, lat1, lon2, lat2);  -- 미터 (lon/lat 직접)
+SELECT ST_Contains(polygon, point);
+SELECT ST_Within(point, polygon);
+SELECT ST_Intersects(g1, g2);
+SELECT ST_Overlaps(g1, g2);</code></pre>
+
+    <h2 id="example">예시 — 사용자 위치 ↔ 매장 매칭</h2>
+<pre><code>CREATE TABLE store (
+  store_id BIGINT,
+  lon DOUBLE, lat DOUBLE,
+  name VARCHAR(64)
+)
+PRIMARY KEY(store_id) DISTRIBUTED BY HASH(store_id);
+
+CREATE TABLE visit (
+  visit_id BIGINT,
+  user_id  BIGINT,
+  lon DOUBLE, lat DOUBLE,
+  ts DATETIME
+)
+DUPLICATE KEY(visit_id) DISTRIBUTED BY RANDOM;
+
+-- 1km 안에 있는 매장 찾기 (거리 기반 — 인덱스 최적화는 제한적)
+SELECT v.visit_id, s.name,
+       ST_Distance_Sphere(v.lon, v.lat, s.lon, s.lat) AS d_m
+FROM visit v
+JOIN store s
+  ON ST_Distance_Sphere(v.lon, v.lat, s.lon, s.lat) &lt; 1000
+WHERE v.ts &gt;= now() - INTERVAL 1 HOUR;</code></pre>
+
+    <h2 id="caveats">주의</h2>
+    <ul>
+      <li>SR의 GIS는 <strong>인덱스 가속이 약함</strong>. 큰 풀스캔 거리계산은 느릴 수 있다.</li>
+      <li>지리좌표(lon/lat)와 평면좌표(x/y)를 혼동하지 말 것 — <code>ST_Distance_Sphere</code>는 위경도 기반.</li>
+      <li>대용량 GIS 분석은 PostGIS / Sedona를 거쳐 SR로 결과만 가져오는 패턴이 일반적.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>"근접 매장 찾기" 같은 단발 쿼리는 SR로 충분. 도시별 매장 1만개 × 방문 100만건 정도면 OK.</li>
+        <li>도시·구역 ID를 적재 시 미리 부여(geofence 결과)해 두면 GIS 함수 없이 단순 등호 join이 가능 — 이쪽이 보통 더 빠름.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./array-map-struct.html">← Array·Map·Struct</a>
+        <a href="./udf.html">다음 → UDF</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/sql-reference/sql-functions/spatial-functions/" target="_blank" rel="noopener">docs.starrocks.io / Spatial functions</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

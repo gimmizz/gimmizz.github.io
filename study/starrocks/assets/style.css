@@ -397,7 +397,8 @@ body:has(.layout.sb-collapsed) .sidebar-toggle { left: 12px; }
   background: #0d1117 !important;
   text-shadow: none !important;
 }
-/* Prism의 text-shadow가 다크 배경에서 밑줄처럼 보이는 현상 제거 */
+/* Prism의 text-shadow가 다크 배경에서 밑줄처럼 보이는 현상 제거
+   + inline code 스타일(border)이 .token으로 번지는 박스 현상 제거 */
 .content pre,
 .content pre code,
 .content pre[class*="language-"] code,
@@ -406,6 +407,8 @@ body:has(.layout.sb-collapsed) .sidebar-toggle { left: 12px; }
   background: transparent !important;
   text-shadow: none !important;
   text-decoration: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 /* Mermaid 다이어그램 박스 */

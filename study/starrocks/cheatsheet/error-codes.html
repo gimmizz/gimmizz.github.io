@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>에러 메시지 → 원인 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="cs-err" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / Cheat Sheet / 에러</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Cheat Sheet — 자주 만나는 에러 → 원인 / 해법</h1>
+
+    <h2 id="conn">연결 / 인증</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>Too many connections</td><td>FE 동시 연결 한도 도달</td><td><code>ADMIN SET FRONTEND CONFIG ("qe_max_connection"="4096")</code> + 누수 연결 점검</td></tr>
+        <tr><td>Access denied for user 'X'@'...'</td><td>비밀번호/권한 오류</td><td><code>SHOW GRANTS FOR 'X'</code> 확인</td></tr>
+        <tr><td>SSL connection error</td><td>SSL 미설정 또는 인증서 문제</td><td><code>--ssl-mode=DISABLED</code>로 임시 확인 후 fe.conf 점검</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="query">쿼리 실행</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>Mem limit exceeded</td><td>쿼리/적재가 한도 초과</td><td><code>SET query_mem_limit = ...</code>; 또는 <code>SET enable_spill=true</code>; 쿼리 단순화</td></tr>
+        <tr><td>Query timeout</td><td>SLA 초과</td><td><code>SET query_timeout = ...</code>; 통계/플랜 점검; MV 가속</td></tr>
+        <tr><td>Failed to find a backend with sufficient resources</td><td>BE 메모리 부족 또는 alive BE 부족</td><td>BE 상태 확인, 큰 쿼리 정리</td></tr>
+        <tr><td>Tablet not found</td><td>리밸런스/복구 중</td><td>잠시 후 재시도; <code>SHOW PROC '/cluster_balance'</code></td></tr>
+        <tr><td>Disk Mb usage high</td><td>BE 디스크 임계 초과</td><td>오래된 파티션 DROP 또는 디스크 추가</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="load">적재</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>Label already exists</td><td>같은 label 재사용</td><td>label에 timestamp/seq 포함</td></tr>
+        <tr><td>too many filtered rows</td><td>스키마 불일치 / 잘못된 jsonpaths</td><td>응답 JSON의 ErrorURL에서 실패 행 확인</td></tr>
+        <tr><td>Routine load PAUSED</td><td>실패율/잡 오류</td><td><code>SHOW ROUTINE LOAD ...</code>의 ErrorLogUrl, RESUME</td></tr>
+        <tr><td>Stream load: failed to find a backend</td><td>FE에서 BE를 못 찾음</td><td>BE alive 확인; 한 BE라도 살아있어야 적재 가능</td></tr>
+        <tr><td>Broker not found</td><td>Broker 미등록 또는 다운</td><td><code>SHOW BROKER</code> 확인</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="catalog">External Catalog</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>Failed to access metastore: thrift...</td><td>HMS 도달 불가</td><td>네트워크/방화벽; Kerberos 점검</td></tr>
+        <tr><td>Failed to list partition names</td><td>HMS 메타 캐시 충돌 또는 권한</td><td><code>REFRESH CATALOG</code>; HMS 권한</td></tr>
+        <tr><td>Cannot find table 'X'</td><td>메타 캐시 stale</td><td><code>REFRESH EXTERNAL TABLE</code></td></tr>
+        <tr><td>S3 access denied</td><td>access/secret 키, IAM 정책</td><td>키 갱신; bucket policy</td></tr>
+        <tr><td>UnknownHost</td><td>DNS 또는 /etc/hosts 누락</td><td>모든 BE에서 호스트 해석 가능해야</td></tr>
+        <tr><td>Kerberos: GSS exception</td><td>keytab 만료 / principal 불일치</td><td>kinit 갱신, krb5.conf 확인</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="schema">DDL / 스키마</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>Schema change is in progress</td><td>이전 ALTER 진행 중</td><td><code>SHOW ALTER TABLE COLUMN</code>로 진행 확인</td></tr>
+        <tr><td>Cannot drop column ...</td><td>키 컬럼 / 인덱스 의존</td><td>인덱스 먼저 DROP 후 컬럼 DROP</td></tr>
+        <tr><td>Column type cannot be changed</td><td>비호환 타입 변경</td><td><em>v2</em> 테이블 + INSERT INTO ... SELECT 패턴 (<a href="../ops/schema-evolution.html#incompatible">참고</a>)</td></tr>
+        <tr><td>materialized view is inactive</td><td>베이스 변경으로 무효화</td><td>원인 파악 후 <code>ALTER MATERIALIZED VIEW ... ACTIVE</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="fe">FE / 메타데이터</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>master FE is not ready</td><td>FE Leader 부재 (재선출 중)</td><td>잠시 대기; FE 다수 alive 확인</td></tr>
+        <tr><td>BDB JE error / 메타 부트 실패</td><td>fe-meta 손상</td><td>fe-meta 백업 복원 (<a href="../ops/dr-scenarios.html#s4">DR 시나리오 4</a>)</td></tr>
+        <tr><td>Edit log overflow</td><td>edit log 적체</td><td>checkpoint 검증; FE 디스크 점검</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="be">BE</h2>
+    <table>
+      <thead><tr><th>메시지</th><th>원인</th><th>해법</th></tr></thead>
+      <tbody>
+        <tr><td>BE process exited (OOM)</td><td>OS OOM Killer</td><td>mem_limit↓; query_mem_limit; 디스크/swap 점검</td></tr>
+        <tr><td>compaction score &gt; 100</td><td>적체</td><td>compaction 워커 ↑; 적재 batch 크기 ↑</td></tr>
+        <tr><td>tablet clone in progress</td><td>BE 복구 중</td><td>잠시 대기; 큐 모니터링</td></tr>
+        <tr><td>persistent index disk usage high</td><td>PK 인덱스 폭증</td><td>오래된 파티션 DROP; <code>enable_persistent_index</code> 검증</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="diag">진단 절차 (어떤 에러든)</h2>
+    <ol>
+      <li>전문(full) 에러 메시지 + queryId/loadLabel 수집.</li>
+      <li><code>SHOW LOAD WHERE LABEL='...'</code> 또는 <code>SHOW PROFILE FROM '...'</code> 으로 단계별 분석.</li>
+      <li>FE 로그 (<code>fe.log</code>) 또는 BE 로그 (<code>be.WARNING</code>)에서 같은 시각 메시지 확인.</li>
+      <li>알려진 케이스라면 위 표 참고. 새로운 케이스라면 GitHub Issues 검색.</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>이 표는 운영 시작 후 6개월 동안 가장 자주 펼치게 됩니다. 팀 위키에 사본을 두고 새 케이스가 발생할 때마다 추가.</li>
+        <li>알람 메시지에 SR queryId / loadLabel을 함께 보내도록 설정하면 진단이 빠릅니다.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./session-vars.html">← 세션 변수</a>
+        <a href="../releases/4.x-changes.html">다음 → 4.x 주요 변경</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/faq/" target="_blank" rel="noopener">docs.starrocks.io / FAQ</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>
