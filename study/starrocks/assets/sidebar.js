@@ -284,12 +284,12 @@
         startOnLoad: false,
         theme: 'base',
         themeVariables: {
-          primaryColor: '#ede9fe',           // violet-100
+          primaryColor: '#f3f4f6',           // gray-100
           primaryTextColor: '#1f2937',
-          primaryBorderColor: '#6d28d9',     // violet-700
-          lineColor: '#8b5cf6',              // violet-500
+          primaryBorderColor: '#4f46e5',     // indigo-600 (테두리만 액센트)
+          lineColor: '#6b7280',              // gray-500
           secondaryColor: '#eef2ff',         // indigo-50
-          tertiaryColor: '#faf5ff',
+          tertiaryColor: '#fafafa',
           fontFamily: 'inherit',
           edgeLabelBackground: '#ffffff',
         },

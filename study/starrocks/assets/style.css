@@ -5,33 +5,42 @@
 :root {
   --sidebar-width: 290px;
   --color-bg: #ffffff;
-  --color-bg-alt: #fafaff;          /* 살짝 보라빛 도는 흰색 */
+  --color-bg-alt: #f7f8fa;
   --color-text: #1f2937;
   --color-text-muted: #6b7280;
   --color-border: #e5e7eb;
-  --color-border-soft: #eef0f6;
+  --color-border-soft: #eef0f4;
 
-  /* 인디고 - 바이올렛 통일 팔레트 */
-  --color-accent: #6d28d9;          /* violet-700: 메인 액센트 */
-  --color-accent-2: #4f46e5;        /* indigo-600: 부 액센트 */
-  --color-accent-soft: #ede9fe;     /* violet-100: 옅은 배경 */
-  --color-accent-hover: #f3f0ff;    /* hover 배경 */
+  /* 절제된 인디고 액센트 (사이드바·링크 한정) */
+  --color-accent: #4f46e5;          /* indigo-600 */
+  --color-accent-2: #6366f1;        /* indigo-500 */
+  --color-accent-soft: #eef2ff;     /* indigo-50 */
+  --color-accent-hover: #f5f6fb;
   --color-link: #4f46e5;
   --color-link-hover: #4338ca;
 
-  /* 콜아웃 — 톤 통일 (warn만 빨강 유지) */
-  --color-tip-bg: #f5f3ff;          /* violet-50 */
-  --color-tip-border: #8b5cf6;      /* violet-500 */
-  --color-cluster-bg: #eef2ff;      /* indigo-50 */
-  --color-cluster-border: #6366f1;  /* indigo-500 */
-  --color-warn-bg: #fef2f2;
-  --color-warn-border: #ef4444;
+  /* 콜아웃 — 유형별로 색상 분리 (노/파/초/빨) */
+  --color-tip-bg: #fff8e1;          /* 노랑 — 한 줄 요약 / Highlight */
+  --color-tip-border: #f5b400;
+  --color-tip-title: #8a6d00;
 
-  --color-code-bg: #f5f3ff;
-  --color-code-text: #6d28d9;
+  --color-cluster-bg: #eef6ff;      /* 파랑 — 🖥️ 클러스터 적용 노트 */
+  --color-cluster-border: #2e7df0;
+  --color-cluster-title: #1d4ed8;
+
+  --color-note-bg: #ecfdf5;         /* 초록 — 보충 정보 / 💡 팁 */
+  --color-note-border: #10b981;
+  --color-note-title: #047857;
+
+  --color-warn-bg: #ffebe9;         /* 빨강 — 주의 */
+  --color-warn-border: #cf222e;
+  --color-warn-title: #b91c1c;
+
+  --color-code-bg: #f4f4f8;
+  --color-code-text: #1f2937;
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md: 0 4px 14px rgba(79, 70, 229, 0.08);
+  --shadow-md: 0 4px 14px rgba(15, 23, 42, 0.06);
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", "Pretendard", Roboto, sans-serif;
   --font-mono: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -62,7 +71,7 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
 .sidebar {
   width: var(--sidebar-width);
   flex-shrink: 0;
-  background: linear-gradient(180deg, #fbfaff 0%, #f5f3ff 100%);
+  background: #ffffff;
   border-right: 1px solid var(--color-border-soft);
   position: sticky;
   top: 0;
@@ -70,14 +79,13 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   overflow-y: auto;
   padding: 26px 16px 32px;
 }
-/* 사이드바 스크롤바 — 옅은 보라 */
 .sidebar::-webkit-scrollbar { width: 6px; }
 .sidebar::-webkit-scrollbar-thumb {
-  background: rgba(109, 40, 217, 0.18);
+  background: rgba(0, 0, 0, 0.12);
   border-radius: 3px;
 }
 .sidebar::-webkit-scrollbar-thumb:hover {
-  background: rgba(109, 40, 217, 0.35);
+  background: rgba(0, 0, 0, 0.22);
 }
 
 /* 사이드바 검색 */
@@ -160,16 +168,13 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   font-size: 17px;
   font-weight: 700;
   margin: 0 6px 2px;
-  background: linear-gradient(135deg, #6d28d9, #4f46e5);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: #111827;
   letter-spacing: -0.01em;
 }
 .sidebar .subtitle {
   font-size: 11.5px;
   color: var(--color-text-muted);
-  margin: 0 6px 22px;
+  margin: 0 6px 18px;
   letter-spacing: 0.01em;
 }
 
@@ -219,12 +224,11 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--color-accent);
+  color: var(--color-text-muted);
   margin: 22px 6px 6px;
-  padding: 4px 6px;
+  padding: 4px 6px 6px;
   font-weight: 700;
   border-bottom: 1px solid var(--color-border-soft);
-  padding-bottom: 6px;
 }
 .sidebar nav > ol > li.section-title:first-of-type {
   margin-top: 6px;
@@ -265,16 +269,7 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   padding-bottom: 14px;
   margin-top: 0;
   margin-bottom: 8px;
-  border-bottom: 1px solid var(--color-border-soft);
-  position: relative;
-}
-.content h1::after {
-  content: "";
-  position: absolute;
-  left: 0; bottom: -1px;
-  width: 60px; height: 2px;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
-  border-radius: 2px;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .content h2 {
@@ -312,7 +307,7 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--color-code-text);
-  border: 1px solid #ede9fe;
+  border: 1px solid var(--color-border-soft);
 }
 
 .content pre {
@@ -376,14 +371,13 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-2));
+  background: var(--color-accent);
   color: #fff;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
-  box-shadow: 0 2px 6px rgba(109, 40, 217, 0.25);
 }
 .steps-container { counter-reset: step; }
 
@@ -488,13 +482,19 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   background: var(--color-tip-bg);
   border-color: var(--color-tip-border);
 }
-.callout.tip .callout-title { color: var(--color-tip-border); }
+.callout.tip .callout-title { color: var(--color-tip-title); }
+
+.callout.note {
+  background: var(--color-note-bg);
+  border-color: var(--color-note-border);
+}
+.callout.note .callout-title { color: var(--color-note-title); }
 
 .callout.warn {
   background: var(--color-warn-bg);
   border-color: var(--color-warn-border);
 }
-.callout.warn .callout-title { color: var(--color-warn-border); }
+.callout.warn .callout-title { color: var(--color-warn-title); }
 
 /* 사용자 클러스터 적용 조언 (요약과 살짝 구분되는 박스) */
 .callout.cluster {
@@ -504,7 +504,7 @@ a:hover { color: var(--color-link-hover); text-decoration: underline; }
   position: relative;
 }
 .callout.cluster .callout-title {
-  color: var(--color-cluster-border);
+  color: var(--color-cluster-title);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -611,7 +611,7 @@ kbd {
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 3px;
-  background: linear-gradient(180deg, var(--color-accent), var(--color-accent-2));
+  background: var(--color-accent);
   opacity: 0;
   transition: opacity 0.15s;
 }
