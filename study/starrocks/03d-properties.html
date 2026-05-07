@@ -104,7 +104,7 @@ PROPERTIES (
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
       <ul>
-        <li><strong>표준 PROPERTIES 템플릿</strong>을 사내 위키로 정리해 놓고, 모든 신규 테이블이 같은 기본값을 갖게 하면 운영 부담이 크게 줄어듭니다.</li>
+        <li><strong>표준 PROPERTIES 템플릿</strong>을 팀 위키로 정리해 놓고, 모든 신규 테이블이 같은 기본값을 갖게 하면 운영 부담이 크게 줄어듭니다.</li>
         <li><strong>compression=ZSTD</strong>: SSD가 충분하니 압축률보다 디코딩 비용이 살짝 더 들어도 OK인 워크로드에서 좋음. 핫 테이블은 LZ4가 안전.</li>
         <li><strong>storage_cooldown_time</strong>: 향후 SSD가 부족해지면 콜드 매체(별도 HDD/오브젝트 스토리지)로 자동 이동시키는 정책을 미리 설계해두는 게 좋음.</li>
       </ul>

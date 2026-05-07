@@ -172,12 +172,12 @@ datacache_mem_size  = "10%"</code></pre>
     </ul>
 
     <div class="callout cluster">
-      <div class="callout-title">클러스터 적용 노트 — 사내 Hive에 붙일 때</div>
+      <div class="callout-title">클러스터 적용 노트 — 운영 Hive에 붙일 때</div>
       <ul>
-        <li><strong>Hive Catalog는 1순위</strong>: 우리 환경에서 가장 많이 쓰일 외부 카탈로그. <code>hive_prod</code> / <code>hive_dev</code> 정도로 환경별로 분리해 만드는 걸 권장.</li>
+        <li><strong>Hive Catalog는 1순위</strong>: 이 가이드 환경에서 가장 많이 쓰일 외부 카탈로그. <code>hive_prod</code> / <code>hive_dev</code> 정도로 환경별로 분리해 만드는 걸 권장.</li>
         <li><strong>Data Cache는 SSD 1개 전용으로</strong>: 8개 SSD 중 1개를 <code>datacache_disk_path</code>에 통째로 할당 → 약 480GB/노드 × 17 BE = ~8TB의 핫 캐시. 직전 1~2주 파티션을 항상 들고 있을 정도로 충분.</li>
         <li><strong>HMS 트래픽 보호</strong>: 기본 캐시 옵션은 1분 새로고침인데, 운영환경에서 1분이 너무 짧으면 <code>metastore_cache_refresh_interval_sec=300</code> 정도로 완화. 대신 새 파티션 적재 즉시 보고 싶다면 ETL 스크립트 끝에 <code>REFRESH EXTERNAL TABLE</code>을 넣어 명시적으로 갱신.</li>
-        <li><strong>Kerberos를 안 쓰는 사내 HDFS라면</strong> Simple 인증 + 전용 OS 계정(<code>sr</code>)으로 단순화. ACL은 HDFS path 단위로 별도 운영.</li>
+        <li><strong>Kerberos를 안 쓰는 HDFS 환경이라면</strong> Simple 인증 + 전용 OS 계정(<code>sr</code>)으로 단순화. ACL은 HDFS path 단위로 별도 운영.</li>
         <li><strong>쓰기는 신중하게</strong>: <code>INSERT OVERWRITE</code>는 Hive 테이블의 파일을 직접 치환합니다. 운영용 Hive 테이블에 직접 쓰지 말고, <em>StarRocks 전용 출력 영역</em>을 별도 디렉터리/DB로 두는 패턴 추천.</li>
       </ul>
     </div>

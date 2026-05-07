@@ -167,7 +167,7 @@ datacache_disk_size = "300G"</code></pre>
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
       <ul>
-        <li>위 코드는 <strong>샘플 템플릿</strong>입니다. systemd unit, ulimit, NTP 등 사내 표준에 맞게 조정.</li>
+        <li>위 코드는 <strong>샘플 템플릿</strong>입니다. systemd unit, ulimit, NTP 등 팀 표준에 맞게 조정.</li>
         <li>비밀번호/keytab은 Ansible Vault에 보관 — 평문 저장 금지.</li>
         <li>약 20대 환경에서는 위 site.yml이 30분 내 완주. 디스크 마운트(<code>/data/sr/disk1..8</code>) 사전 작업이 OS 이미징 단계에 포함되어야 안정적.</li>
         <li>업그레이드 playbook은 별도(<a href="./upgrade-runbook.html">OPS-3</a>)로 분리.</li>

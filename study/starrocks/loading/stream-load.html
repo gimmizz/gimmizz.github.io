@@ -75,7 +75,7 @@
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
       <ul>
-        <li>FE 어디로 보내도 OK이지만, 사내 LB 뒤에 두면 단일 진입점이 깔끔.</li>
+        <li>FE 어디로 보내도 OK이지만, 자체 LB 뒤에 두면 단일 진입점이 깔끔.</li>
         <li>label은 <code>{table}_{yyyymmddHHMMSS}_{idx}</code>가 추적 용이.</li>
         <li>실패 행이 자주 나오는 ETL은 <code>max_filter_ratio</code>를 살짝 열어 두되, 모니터링에서 추적.</li>
       </ul>

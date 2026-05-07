@@ -154,7 +154,7 @@ sequenceDiagram
 
     <h2 id="when">언제 Shared-Nothing이 답인가</h2>
     <ul>
-      <li><strong>온프레 자체 데이터센터</strong> + 안정적 SSD 다수 → 우리 환경.</li>
+      <li><strong>온프레 자체 데이터센터</strong> + 안정적 SSD 다수 → 이 가이드의 가정 환경.</li>
       <li>저지연 BI/대시보드, 고동시성.</li>
       <li>Hive/Iceberg 외부 카탈로그를 함께 쓰면서 자체 마트는 작은 규모.</li>
       <li>운영 인력이 객체 스토리지를 별도로 키우기 어려운 조직.</li>
@@ -165,7 +165,7 @@ sequenceDiagram
       <li>보관 기간이 길고 콜드 데이터 비중이 큼.</li>
       <li>야간/낮 부하 차이가 커서 컴퓨트만 확장하고 싶음.</li>
       <li>여러 분석 클러스터가 같은 데이터를 공유.</li>
-      <li>이미 사내에 안정적 S3 호환 스토리지가 정착.</li>
+      <li>이미 환경에 안정적 S3 호환 스토리지가 정착.</li>
     </ul>
 
     <div class="callout cluster">

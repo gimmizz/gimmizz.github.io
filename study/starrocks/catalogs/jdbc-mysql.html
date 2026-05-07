@@ -65,7 +65,7 @@ WHERE h.dt = '2026-05-07';</code></pre>
     <ol>
       <li><strong>HTTP/HTTPS URL</strong>: Maven Central 등에서 원격으로 다운로드.<br>
         예: <code>https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar</code></li>
-      <li><strong>file:// (FE/BE 모두 같은 경로)</strong>: 인터넷이 막힌 사내망에서 가장 안정적. 모든 FE·BE 노드의 동일 경로(예: <code>/opt/sr/drivers/...</code>)에 JAR을 미리 깔아둡니다.</li>
+      <li><strong>file:// (FE/BE 모두 같은 경로)</strong>: 인터넷이 막힌 내부망에서 가장 안정적. 모든 FE·BE 노드의 동일 경로(예: <code>/opt/sr/drivers/...</code>)에 JAR을 미리 깔아둡니다.</li>
       <li><strong>file:// (NFS 등 공유 경로)</strong>: 모든 노드가 같은 마운트로 접근 가능하다면 사용 가능.</li>
     </ol>
     <p>
@@ -108,7 +108,7 @@ GROUP BY user_id;</code></pre>
     <h2 id="caveats">6-2.7 한계와 자주 만나는 함정</h2>
     <ul>
       <li><strong>RDB 부하</strong>: 큰 테이블에 GROUP BY를 그대로 던지면 원천 RDB가 죽을 수 있음. 운영 RDB는 가능하면 <em>읽기 복제본</em>(MySQL replica 등)에 붙일 것.</li>
-      <li><strong>드라이버 누락</strong>: BE 한 대라도 JAR 다운로드 실패 시 첫 쿼리에서 에러. 사내망에선 <code>file://</code> 방식 권장.</li>
+      <li><strong>드라이버 누락</strong>: BE 한 대라도 JAR 다운로드 실패 시 첫 쿼리에서 에러. 내부망에선 <code>file://</code> 방식 권장.</li>
       <li><strong>네트워크</strong>: 모든 BE가 RDB 포트(예: 3306)에 접근 가능해야 함.</li>
       <li><strong>인증 정보 노출</strong>: <code>SHOW CREATE CATALOG</code>로 비밀번호가 노출될 수 있음 — RBAC로 카탈로그 메타 권한을 제한.</li>
       <li><strong>스키마 변경</strong>: RDB 컬럼이 바뀌면 <code>REFRESH</code>로 메타 갱신.</li>

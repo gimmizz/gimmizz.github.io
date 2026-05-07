@@ -74,7 +74,7 @@ stream_load = SimpleHttpOperator(
     <strong>StarRocksOperator</strong> / <strong>StarRocksStreamLoadOperator</strong> 등을 사용. 없는 환경이라면 위 MySqlOperator/HttpOperator로 충분.</p>
 
     <h2 id="dbt">Airflow + dbt</h2>
-    <p>BashOperator 또는 <code>airflow-dbt</code> / <code>cosmos</code>로 dbt run을 실행. 일반적으로 <em>Dagster + dbt</em>가 dbt 그래프 시각화에 더 강하지만, 사내 표준이 Airflow라면 그대로 사용 OK.</p>
+    <p>BashOperator 또는 <code>airflow-dbt</code> / <code>cosmos</code>로 dbt run을 실행. 일반적으로 <em>Dagster + dbt</em>가 dbt 그래프 시각화에 더 강하지만, 팀 표준이 Airflow라면 그대로 사용 OK.</p>
 <pre><code>dbt_run = BashOperator(
   task_id="dbt_run",
   bash_command="cd /opt/dbt/proj && dbt run --target prod",

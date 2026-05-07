@@ -206,7 +206,7 @@ SHOW BACKENDS;</code></pre>
     <table>
       <thead><tr><th>방식</th><th>장점</th><th>단점</th><th>추천 케이스</th></tr></thead>
       <tbody>
-        <tr><td>바이너리 수동</td><td>가장 단순, 모든 옵션 직접</td><td>스크립트화 필요</td><td>온프레 PM 클러스터 (우리 케이스)</td></tr>
+        <tr><td>바이너리 수동</td><td>가장 단순, 모든 옵션 직접</td><td>스크립트화 필요</td><td>온프레 PM 클러스터 (이 가이드 케이스)</td></tr>
         <tr><td>Docker</td><td>로컬 테스트에 빠름</td><td>프로덕션 권장 X</td><td>개발/학습</td></tr>
         <tr><td>K8s Operator</td><td>탄력적·자동복구</td><td>K8s 운영 노하우 필요</td><td>퍼블릭 클라우드 + Shared-data</td></tr>
         <tr><td>Helm</td><td>Operator의 패키지화</td><td>위와 동일</td><td>K8s 표준 팀</td></tr>
@@ -231,7 +231,7 @@ SHOW BACKENDS;</code></pre>
         <li>FE Leader → Follower 추가 → BE 일괄 ADD</li>
         <li><code>SHOW BACKENDS</code> 결과 alive 갯수 확인</li>
       </ol>
-      <p><strong>Shared-data를 검토할 시점</strong>: 사내에 안정적으로 사용 가능한 S3 호환 객체 스토리지(MinIO 등)가 있고,
+      <p><strong>Shared-data를 검토할 시점</strong>: 안정적으로 사용 가능한 S3 호환 객체 스토리지(MinIO 등)가 있고,
         탄력적으로 컴퓨팅을 늘렸다 줄였다 해야 할 때. 지금은 우선 Shared-nothing으로 단순하게 가는 게 유리합니다.</p>
     </div>
 

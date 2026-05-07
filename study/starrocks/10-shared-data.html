@@ -88,12 +88,12 @@ PROPERTIES (
     </table>
 
     <div class="callout cluster">
-      <div class="callout-title">클러스터 적용 노트 — 우리 환경에서의 도입 시점</div>
+      <div class="callout-title">클러스터 적용 노트 — 본 가이드 환경의 도입 시점</div>
       <ul>
         <li>지금은 SSD 약 65TB(원본)이 충분히 크므로 <strong>Shared-Nothing이 단순·빠름</strong>.</li>
         <li>다음 조건이 누적되면 Shared-Data 검토:
           <ul>
-            <li>사내 안정적인 S3 호환 객체 스토리지(MinIO 등)가 정착</li>
+            <li>환경에 안정적인 S3 호환 객체 스토리지(MinIO 등)가 정착</li>
             <li>"보관 기간 1년+ 데이터" 비중이 50% 넘어감</li>
             <li>야간/낮 컴퓨팅 부하 차이가 큼 → CN 자동 확장 가치 있음</li>
             <li>여러 분석 클러스터가 같은 데이터를 보고 싶음</li>

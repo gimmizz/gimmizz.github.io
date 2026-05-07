@@ -62,7 +62,7 @@ docker run -d --name hms --network srnet -p 9083:9083 \
   -e S3_ACCESS_KEY=minio -e S3_SECRET_KEY=minio123 \
   -e S3_PATH_STYLE_ACCESS=true \
   apache/hive:3.1.3 /opt/hive/bin/hive --service metastore</code></pre>
-        <p>(이미지/환경 변수는 실제 도구에 맞게 조정. 사내에서는 hive-site.xml를 직접 마운트하는 경우가 많음.)</p>
+        <p>(이미지/환경 변수는 실제 도구에 맞게 조정. 운영에서는 hive-site.xml를 직접 마운트하는 경우가 많음.)</p>
       </div>
 
       <div class="step">
@@ -127,7 +127,7 @@ GROUP BY u.user_id;</code></pre>
 
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
-      <p>이 실습 그대로 사내 PM 환경에 옮길 때는 (1) MinIO → 사내 S3/HDFS, (2) HMS → 사내 HMS, (3) StarRocks Allin1 → 약 20대 PM 분산 클러스터로만 바꾸면 됩니다. 카탈로그 등록 SQL은 동일.</p>
+      <p>이 실습 그대로 운영 PM 환경에 옮길 때는 (1) MinIO → 운영 S3/HDFS, (2) HMS → 운영 HMS, (3) StarRocks Allin1 → 약 20대 PM 분산 클러스터로만 바꾸면 됩니다. 카탈로그 등록 SQL은 동일.</p>
     </div>
 
     <footer class="page-footer">

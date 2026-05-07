@@ -88,7 +88,7 @@ SELECT * FROM ic_hms.db.tbl FOR TIMESTAMP AS OF '2026-05-01 00:00:00';</code></p
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
       <ul>
-        <li>사내 Iceberg가 HMS 기반이라면 <code>iceberg.catalog.type=hive</code>로 시작 — Hive Catalog와 코드 패턴이 거의 같아서 운영 부담이 적음.</li>
+        <li>운영 Iceberg가 HMS 기반이라면 <code>iceberg.catalog.type=hive</code>로 시작 — Hive Catalog와 코드 패턴이 거의 같아서 운영 부담이 적음.</li>
         <li>S3/MinIO 위에 Iceberg를 새로 도입한다면 REST 카탈로그(Lakekeeper, Polaris) 검토 — 다중 엔진 공유에 유리.</li>
         <li>Time Travel 권한은 별도 역할로 한정 — 잘못된 시점 조회로 분석이 오염되는 사고 방지.</li>
       </ul>

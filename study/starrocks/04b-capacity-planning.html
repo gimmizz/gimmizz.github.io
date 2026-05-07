@@ -49,7 +49,7 @@
     <table>
       <thead><tr><th>비율</th><th>권장</th><th>의미</th></tr></thead>
       <tbody>
-        <tr><td>CPU : 메모리</td><td><strong>1 : 4</strong></td><td>32 vCPU → 128 GB. 이보다 메모리가 작으면 큰 쿼리에서 OOM 위험. 우리 환경(256GB/16=16GB·vCPU 가정)은 굉장히 메모리 여유.</td></tr>
+        <tr><td>CPU : 메모리</td><td><strong>1 : 4</strong></td><td>32 vCPU → 128 GB. 이보다 메모리가 작으면 큰 쿼리에서 OOM 위험. 이 가이드 환경(256GB/16=16GB·vCPU 가정)은 굉장히 메모리 여유.</td></tr>
         <tr><td>CPU : 데이터 볼륨</td><td><strong>≤ 4 (vCPU당 데이터 4 단위)</strong></td><td>코어 대비 데이터가 너무 많으면 스캔 IO/CPU 병목.</td></tr>
         <tr><td>FE : BE</td><td>3 : 3 ~ 3 : N</td><td>FE는 거의 항상 3대로 고정.</td></tr>
         <tr><td>복제본 수</td><td><strong>3</strong></td><td>BE 수가 ≥ 3이면 표준.</td></tr>
@@ -102,7 +102,7 @@ OS / 여유          : ~20% (커널, free 등)</code></pre>
       <tbody>
         <tr><td>Nginx (stream)</td><td>가장 단순, TCP L4</td><td>health check + retry</td></tr>
         <tr><td>HAProxy</td><td>운영 도구 풍부, 메트릭 좋음</td><td>가장 흔한 선택</td></tr>
-        <tr><td>F5 / 사내 LB</td><td>대기업 표준</td><td>이미 운영 중이라면 그대로</td></tr>
+        <tr><td>F5 / 자체 LB</td><td>대기업 표준</td><td>이미 운영 중이라면 그대로</td></tr>
         <tr><td>K8s Service / MetalLB</td><td>K8s 환경</td><td>Operator 사용 시</td></tr>
       </tbody>
     </table>
@@ -170,20 +170,20 @@ backend sr_fe_http
     </table>
 
     <h2 id="example">실제 예시 — 약 20대 PM 환경 사이징</h2>
-    <p>우리 환경에 위 공식을 적용해보면:</p>
+    <p>본 가이드 환경에 위 공식을 적용해보면:</p>
     <ul>
       <li>FE 3대 — 별도 PM. 사이징 무관(메타·연결만).</li>
       <li>BE 17대. 노드당 32~64 vCPU 가정 → 클러스터 총 ~544~1088 vCPU.</li>
       <li>코어당 5천만 rows/s 가정. 가능 처리량 = 27 ~ 54 billion rows/s.</li>
       <li>SLA 0.5초, QPS 200, 평균 scan 5천만 rows라면 → 필요 코어 (5천만/5천만)/0.5×200 = <strong>400 vCPU</strong>. 안전 계수 1.3 = 520 vCPU. ✅ 여유.</li>
-      <li>스토리지: 노드당 SSD 3.84TB × 17 = 65 TB raw / 3복제 = ~22 TB 가용. 우리 환경의 단일 BE 디스크 합계 3.84TB < 10 TB ✅.</li>
+      <li>스토리지: 노드당 SSD 3.84TB × 17 = 65 TB raw / 3복제 = ~22 TB 가용. 이 환경의 단일 BE 디스크 합계 3.84TB < 10 TB ✅.</li>
       <li>메모리: 노드당 256GB → mem_limit 80% = 200GB. CPU:메모리 비율이 매우 넉넉(=BE에 유리).</li>
     </ul>
 
     <div class="callout cluster">
       <div class="callout-title">클러스터 적용 노트</div>
       <ul>
-        <li>cal_rows는 운영 워크로드와 비슷한 SQL 10~20개로 PoC 측정해 사내 표준값을 가지고 있는 게 가장 정확. 그 수치 없이는 산식이 수십 배 차이까지 날 수 있음.</li>
+        <li>cal_rows는 운영 워크로드와 비슷한 SQL 10~20개로 PoC 측정해 팀 표준값을 가지고 있는 게 가장 정확. 그 수치 없이는 산식이 수십 배 차이까지 날 수 있음.</li>
         <li>SSD 8개 / 480GB 구성은 공식 권장(디스크당 &lt; 2TB, 합계 &lt; 10TB)에 잘 부합 — 그대로 진행 권장.</li>
         <li>HAProxy LB를 처음부터 두면 추후 FE 3 → 5 확장 시 BI/도구 설정 변경이 필요 없음.</li>
         <li>이질적 BE를 섞지 말 것 — 약 17대를 동시 발주해 같은 사양으로.</li>
