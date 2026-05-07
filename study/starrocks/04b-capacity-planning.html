@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>4-1. Capacity Planning — StarRocks 가이드</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="capacity" data-base="./"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 4-1. Capacity Planning</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>4-1. Capacity Planning — 사이징 공식과 베스트 프랙티스</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>"몇 대가 필요한가?"는 <strong>예상 QPS × 응답시간 SLA × 스캔/코어 처리량</strong>으로 역산한다.
+      거기에 메모리·디스크·네트워크 제약을 차례로 검증해 최종 노드 수가 결정된다.</p>
+    </div>
+
+    <h2 id="cpu-formula">CPU 용량 산출 공식 (공식 블로그 권장)</h2>
+<pre><code>e_core = (scan_rows / cal_rows) / e_rt * e_qps</code></pre>
+    <table>
+      <thead><tr><th>변수</th><th>의미</th><th>예시</th></tr></thead>
+      <tbody>
+        <tr><td><code>scan_rows</code></td><td>한 쿼리가 스캔할 raw 행 수</td><td>30,000,000</td></tr>
+        <tr><td><code>cal_rows</code></td><td>코어당 초당 처리 가능한 행 수 (10M~100M)</td><td>50,000,000</td></tr>
+        <tr><td><code>e_rt</code></td><td>응답시간 SLA (초)</td><td>0.3</td></tr>
+        <tr><td><code>e_qps</code></td><td>예상 동시 QPS</td><td>180</td></tr>
+        <tr><td><strong><code>e_core</code></strong></td><td>필요한 vCPU</td><td><strong>360 vCPU</strong></td></tr>
+      </tbody>
+    </table>
+    <p>예시: 30M rows × (1/50M rows/s/core) ÷ 0.3s × 180 QPS = 360 vCPU.
+    안전 계수(burst 대응) 1.3~1.5배를 곱하면 약 500 vCPU. 노드당 32 vCPU라면 약 <strong>16대 BE</strong>.</p>
+
+    <div class="callout warn">
+      <div class="callout-title">⚠️ 주의 — cal_rows의 폭이 큼</div>
+      <p>10M~100M rows/s/core는 쿼리 형태에 따라 큰 차이가 난다.
+      <strong>단순 필터/스캔</strong>은 100M에 가깝고, <strong>복잡 JOIN/집계/문자열</strong>은 10M에 가깝다.
+      운영 워크로드와 비슷한 SQL로 PoC 측정한 cal_rows를 쓰는 것이 가장 정확.</p>
+    </div>
+
+    <h2 id="ratio">기본 비율 가이드라인 (공식 권장)</h2>
+    <table>
+      <thead><tr><th>비율</th><th>권장</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td>CPU : 메모리</td><td><strong>1 : 4</strong></td><td>32 vCPU → 128 GB. 이보다 메모리가 작으면 큰 쿼리에서 OOM 위험. 우리 환경(256GB/16=16GB·vCPU 가정)은 굉장히 메모리 여유.</td></tr>
+        <tr><td>CPU : 데이터 볼륨</td><td><strong>≤ 4 (vCPU당 데이터 4 단위)</strong></td><td>코어 대비 데이터가 너무 많으면 스캔 IO/CPU 병목.</td></tr>
+        <tr><td>FE : BE</td><td>3 : 3 ~ 3 : N</td><td>FE는 거의 항상 3대로 고정.</td></tr>
+        <tr><td>복제본 수</td><td><strong>3</strong></td><td>BE 수가 ≥ 3이면 표준.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="be-disk">BE 디스크 한계 (공식 권장)</h2>
+    <ul>
+      <li><strong>단일 BE 노드 디스크 합계: 최대 10 TB</strong> — 그 이상이면 회복(클론) 시간이 너무 오래 걸려 위험.</li>
+      <li><strong>디스크 1개당 용량: 2 TB 미만 권장</strong> — IO 병렬도 + 복구 단위 제어.</li>
+      <li><strong>디스크 종류: SSD/NVMe</strong> — HDD는 콜드 매체로만.</li>
+      <li><strong>RAID 미권장</strong> — SR이 자체적으로 디스크들을 균등 분산 사용. RAID 0/5는 단일 실패가 BE 전체로 번짐.</li>
+      <li><strong>한 디스크당 한 마운트</strong> + ext4/xfs.</li>
+    </ul>
+    <table>
+      <thead><tr><th>구성</th><th>OK</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td>SSD 480GB × 8 (~3.84 TB)</td><td>✅ 권장 범위 안</td><td>디스크당 ~480GB &lt; 2TB, 합계 &lt; 10TB</td></tr>
+        <tr><td>SSD 4TB × 4 (16 TB)</td><td>⚠️</td><td>합계 10TB 초과 — 큰 BE는 복구 시 위험</td></tr>
+        <tr><td>HDD 8TB × 12 (96 TB)</td><td>❌</td><td>HDD + 디스크당 8TB는 모두 부적합</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="memory-budget">메모리 예산</h2>
+    <p>BE 메모리는 다음 항목에 분배(<a href="./07-tuning.html#be-mem">8장 튜닝</a>·<a href="./internals/memtracker.html">SYS-3</a> 참고).</p>
+<pre><code>Query Pool         : 활성 쿼리 (mem_limit의 ~50%)
+Storage Page Cache : 컬럼 페이지 캐시 (~20%)
+Data Cache         : 외부 카탈로그 캐시 (~10%)
+PK Index           : Primary Key 테이블 인덱스
+Compaction         : 컴팩션 워커
+OS / 여유          : ~20% (커널, free 등)</code></pre>
+    <p>대략적 메모리 산식:</p>
+<pre><code>BE_mem ≈ vCPU × 4 GB                         -- 비율 기준
+       + tablet_count × 2 KB                  -- 메타 부담
+       + active_query × avg_query_mem         -- 쿼리 풀</code></pre>
+
+    <h2 id="network">네트워크</h2>
+    <ul>
+      <li><strong>10 GbE 이상 권장</strong> — 1 GbE는 셔플/적재가 즉시 병목.</li>
+      <li><strong>BE ↔ BE</strong>는 같은 스위치/랙이 이상적 — Exchange(셔플) 트래픽이 큼.</li>
+      <li><strong>BE ↔ HMS/HDFS</strong> — 외부 카탈로그 사용 시 NameNode/Metastore 도달 가능.</li>
+      <li><strong>BE ↔ Object Storage</strong> — Shared-data 모드 또는 Hive on S3.</li>
+      <li>방화벽: <a href="./02-architecture.html#ports">포트 표</a> 참고. 9030/8030/9010/9020/8040/9050/9060/8060.</li>
+    </ul>
+
+    <h2 id="lb">Load Balancer (FE 앞단)</h2>
+    <p>운영에서는 FE 3대를 그대로 BI/애플리케이션에 노출하지 않고 LB 뒤에 둔다.</p>
+    <table>
+      <thead><tr><th>도구</th><th>장점</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>Nginx (stream)</td><td>가장 단순, TCP L4</td><td>health check + retry</td></tr>
+        <tr><td>HAProxy</td><td>운영 도구 풍부, 메트릭 좋음</td><td>가장 흔한 선택</td></tr>
+        <tr><td>F5 / 사내 LB</td><td>대기업 표준</td><td>이미 운영 중이라면 그대로</td></tr>
+        <tr><td>K8s Service / MetalLB</td><td>K8s 환경</td><td>Operator 사용 시</td></tr>
+      </tbody>
+    </table>
+    <p><strong>HAProxy 설정 예</strong>:</p>
+<pre><code>frontend sr_mysql
+  bind *:9030
+  mode tcp
+  default_backend sr_fe
+
+backend sr_fe
+  mode tcp
+  balance leastconn
+  option tcp-check
+  tcp-check connect
+  server fe1 fe1.internal:9030 check inter 3s
+  server fe2 fe2.internal:9030 check inter 3s
+  server fe3 fe3.internal:9030 check inter 3s
+
+frontend sr_http
+  bind *:8030
+  mode http
+  default_backend sr_fe_http
+
+backend sr_fe_http
+  mode http
+  balance roundrobin
+  option httpchk GET /api/health
+  server fe1 fe1.internal:8030 check
+  server fe2 fe2.internal:8030 check
+  server fe3 fe3.internal:8030 check</code></pre>
+
+    <h2 id="homogeneous">동질적 클러스터 (Homogeneous)</h2>
+    <p>모든 BE를 같은 CPU/메모리/디스크로 구성하는 것이 표준. 이질적 BE가 섞이면:</p>
+    <ul>
+      <li>스케줄러가 가장 느린 BE에 맞춰져 전체가 느려짐.</li>
+      <li>Tablet 분배가 불균형해져 디스크 사용 편차 발생.</li>
+      <li>복제 배치 정책이 복잡해짐.</li>
+    </ul>
+
+    <h2 id="min-prod">프로덕션 최소 규모</h2>
+    <ul>
+      <li><strong>최소: FE 3 + BE 3</strong> (총 6 노드).</li>
+      <li>이보다 작으면 단일 BE 다운에서 복제본 손실 위험 또는 FE quorum 깨짐.</li>
+      <li>학습/개발은 Allin1 컨테이너(<a href="./practice/01-docker-quickstart.html">P-1</a>)으로 충분.</li>
+    </ul>
+
+    <h2 id="scale">스케일링 전략</h2>
+    <ol>
+      <li><strong>수직 확장(Vertical)</strong> — 같은 BE에 디스크/메모리 추가. 디스크 추가가 가장 흔한 첫 번째 카드.</li>
+      <li><strong>수평 확장(Horizontal)</strong> — BE 추가 (<a href="./05-administration.html#add-be">5장 운영</a> 참고). Tablet 자동 리밸런스.</li>
+      <li><strong>Compute 확장 only</strong> — Shared-data 모드의 CN 추가 (<a href="./10-shared-data.html">5-3</a>).</li>
+      <li><strong>Resource Group 분리</strong> — 노드를 늘리지 않고도 워크로드 격리로 체감 성능 향상.</li>
+    </ol>
+
+    <h2 id="workload">워크로드별 사이징 가이드</h2>
+    <table>
+      <thead><tr><th>워크로드</th><th>병목</th><th>중점</th></tr></thead>
+      <tbody>
+        <tr><td>고동시성 BI 대시보드</td><td>vCPU + Resource Group concurrency</td><td>FE 앞 LB + Observer 1~2대 + MV로 응답 캐시</td></tr>
+        <tr><td>대용량 ad-hoc 분석</td><td>BE 메모리 + IO</td><td>큰 mem_limit, ETL Resource Group, 스필 활성</td></tr>
+        <tr><td>실시간 적재(CDC)</td><td>PK 인덱스 메모리 + Compaction</td><td>enable_persistent_index, update compaction 워커 ↑</td></tr>
+        <tr><td>외부 카탈로그(Hive/Iceberg)</td><td>HMS 호출 + 원격 IO</td><td>Data Cache 전용 디스크, 메타 캐시 TTL</td></tr>
+        <tr><td>장기 보존 + 가끔 분석</td><td>스토리지 비용</td><td>Shared-data 모드 또는 storage_cooldown</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="example">실제 예시 — 약 20대 PM 환경 사이징</h2>
+    <p>우리 환경에 위 공식을 적용해보면:</p>
+    <ul>
+      <li>FE 3대 — 별도 PM. 사이징 무관(메타·연결만).</li>
+      <li>BE 17대. 노드당 32~64 vCPU 가정 → 클러스터 총 ~544~1088 vCPU.</li>
+      <li>코어당 5천만 rows/s 가정. 가능 처리량 = 27 ~ 54 billion rows/s.</li>
+      <li>SLA 0.5초, QPS 200, 평균 scan 5천만 rows라면 → 필요 코어 (5천만/5천만)/0.5×200 = <strong>400 vCPU</strong>. 안전 계수 1.3 = 520 vCPU. ✅ 여유.</li>
+      <li>스토리지: 노드당 SSD 3.84TB × 17 = 65 TB raw / 3복제 = ~22 TB 가용. 우리 환경의 단일 BE 디스크 합계 3.84TB < 10 TB ✅.</li>
+      <li>메모리: 노드당 256GB → mem_limit 80% = 200GB. CPU:메모리 비율이 매우 넉넉(=BE에 유리).</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>cal_rows는 운영 워크로드와 비슷한 SQL 10~20개로 PoC 측정해 사내 표준값을 가지고 있는 게 가장 정확. 그 수치 없이는 산식이 수십 배 차이까지 날 수 있음.</li>
+        <li>SSD 8개 / 480GB 구성은 공식 권장(디스크당 &lt; 2TB, 합계 &lt; 10TB)에 잘 부합 — 그대로 진행 권장.</li>
+        <li>HAProxy LB를 처음부터 두면 추후 FE 3 → 5 확장 시 BI/도구 설정 변경이 필요 없음.</li>
+        <li>이질적 BE를 섞지 말 것 — 약 17대를 동시 발주해 같은 사양으로.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./04-deployment.html">← 4. 배포</a>
+        <a href="./05-administration.html">다음 → 5. 운영</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://www.starrocks.io/blog/starrocks-best-practices-capacity-planning-and-deployment" target="_blank" rel="noopener">starrocks.io / Best Practices: Capacity Planning &amp; Deployment</a>,
+          <a href="https://docs.starrocks.io/docs/deployment/plan_cluster/" target="_blank" rel="noopener">docs / Plan cluster</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

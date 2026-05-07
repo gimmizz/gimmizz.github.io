@@ -53,6 +53,12 @@ graph TD
       <li><strong>배포 후 보안 설정</strong> — root 비밀번호, 파라미터 튜닝.</li>
     </ol>
 
+    <div class="callout tip">
+      <div class="callout-title">📐 사이징 공식이 필요하면</div>
+      <p>예상 QPS·SLA·스캔 행수로 필요한 vCPU를 역산하는 공식, BE 디스크 한계(단일 노드 ≤ 10TB), CPU:메모리 1:4 비율,
+      HAProxy LB 설정 예시는 <a href="./04b-capacity-planning.html"><strong>4-1. Capacity Planning</strong></a>에서 다룬다.</p>
+    </div>
+
     <h2 id="reqs">4.2 하드웨어 권장사항 (공식)</h2>
     <table>
       <thead>

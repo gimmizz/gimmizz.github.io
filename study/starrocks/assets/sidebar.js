@@ -140,13 +140,16 @@
       if (!window.mermaid) return;
       window.mermaid.initialize({
         startOnLoad: false,
-        theme: 'default',
+        theme: 'base',
         themeVariables: {
-          primaryColor: '#fff8e1',
-          primaryTextColor: '#1f2328',
-          primaryBorderColor: '#cf222e',
-          lineColor: '#57606a',
+          primaryColor: '#ede9fe',           // violet-100
+          primaryTextColor: '#1f2937',
+          primaryBorderColor: '#6d28d9',     // violet-700
+          lineColor: '#8b5cf6',              // violet-500
+          secondaryColor: '#eef2ff',         // indigo-50
+          tertiaryColor: '#faf5ff',
           fontFamily: 'inherit',
+          edgeLabelBackground: '#ffffff',
         },
         flowchart: { htmlLabels: true, curve: 'basis' },
       });
