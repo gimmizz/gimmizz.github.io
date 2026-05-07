@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StarRocks 한글 정리 — 시작하기</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="index" data-base="./"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a></span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>StarRocks 한글 정리</h1>
+    <p>
+      StarRocks 공식 문서(<a href="https://docs.starrocks.io/" target="_blank" rel="noopener">docs.starrocks.io</a>)의
+      핵심 내용을 한국어로 옮기고, 사내 클러스터 구축에 활용할 수 있도록 정리한 문서입니다.
+      각 페이지에는 <strong>요약</strong>, <strong>본문</strong>, <strong>출처</strong>가 함께 실려 있고,
+      필자가 운영할 환경(약 20대 PM 클러스터)에 어떻게 적용할지를
+      <span class="callout cluster" style="display:inline; padding:2px 8px;"> 클러스터 적용 노트 </span>
+      박스로 별도 표기합니다.
+    </p>
+
+    <div class="callout tip">
+      <div class="callout-title">📚 문서 사용법</div>
+      <p>왼쪽 사이드바에서 원하는 주제로 이동할 수 있습니다.
+      각 페이지 상단에 해당 챕터의 요약이, 하단에 출처와 다음/이전 링크가 있습니다.</p>
+      <p>코드 블록은 다크 테마로 표시되고, 표 안의 키워드는 <code>monospace</code>로 강조됩니다.</p>
+    </div>
+
+    <h2 id="quick-nav">바로가기</h2>
+    <div class="cards">
+      <a class="card" href="./01-introduction.html">
+        <h3>1. StarRocks 소개</h3>
+        <p>StarRocks가 무엇이고 어디에 쓰이는지, 다른 OLAP 엔진과의 차이.</p>
+      </a>
+      <a class="card" href="./02-architecture.html">
+        <h3>2. 아키텍처</h3>
+        <p>FE / BE / CN 컴포넌트, Shared-nothing vs Shared-data.</p>
+      </a>
+      <a class="card" href="./03-data-models.html">
+        <h3>3. 데이터 모델</h3>
+        <p>Duplicate / Aggregate / Unique / Primary Key 4가지 테이블.</p>
+      </a>
+      <a class="card" href="./04-deployment.html">
+        <h3>4. 배포</h3>
+        <p>FE HA, BE 다중 노드, 약 20대 PM 토폴로지 권장안.</p>
+      </a>
+      <a class="card" href="./05-administration.html">
+        <h3>5. 운영</h3>
+        <p>노드 추가/제거, 백업, 모니터링.</p>
+      </a>
+      <a class="card" href="./catalogs/index.html">
+        <h3>6. 카탈로그</h3>
+        <p>Internal · External · Unified Catalog. Hive · MySQL · Iceberg 등.</p>
+      </a>
+      <a class="card" href="./06-query-mv.html">
+        <h3>7. 쿼리 / MV</h3>
+        <p>벡터화 실행, CBO, Materialized View로 가속.</p>
+      </a>
+      <a class="card" href="./07-tuning.html">
+        <h3>8. 튜닝 가이드</h3>
+        <p>BE 파라미터, SSD 8개 경로 활용, 메모리 풀.</p>
+      </a>
+    </div>
+
+    <h2 id="env">대상 환경</h2>
+    <p>
+      이 문서는 사내 자체 데이터센터 환경에서의 StarRocks 클러스터 운영을 가정하고 작성되었습니다.
+    </p>
+    <table>
+      <thead>
+        <tr><th>항목</th><th>스펙</th><th>비고</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>물리 서버 수</td><td>약 20대</td><td>FE 3 + BE 17 내외 가정</td></tr>
+        <tr><td>메모리</td><td>16GB × 16 = 256GB / 노드</td><td>BE에 매우 넉넉, MV/캐시 활용 여지 큼</td></tr>
+        <tr><td>스토리지</td><td>SSD 480GB × 8 = ~3.84TB / 노드</td><td>BE의 <code>storage_root_path</code>에 8개 경로 분산 권장</td></tr>
+        <tr><td>네트워크</td><td>10GbE 이상 가정</td><td>BE 간 셔플 비용에 직접 영향</td></tr>
+        <tr><td>주요 사용 패턴</td><td>External Catalog 다수 (Hive / HDFS / MySQL 등)</td><td>StarRocks를 "통합 쿼리 엔진"으로 활용</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <p>
+        한 노드당 메모리가 256GB로 매우 크고 SSD가 8개 있는 구성은
+        StarRocks 입장에서 BE에 굉장히 유리한 환경입니다.
+        — 메모리는 <code>mem_limit</code>·BlockCache·MV 캐시에,
+        SSD 8개는 <code>storage_root_path</code>를 8개 경로로 등록해 I/O 병렬도를 끌어올리는 방향이 자연스럽습니다.
+        반대로 PM의 <strong>노드 수가 많지 않은 만큼(약 20대)</strong>,
+        FE 3대를 별도 PM에 두고 나머지를 모두 BE로 활용하는 구성이 가장 효율적입니다 (자세한 내용은
+        <a href="./04-deployment.html">4장 배포</a>·<a href="./07-tuning.html">8장 튜닝</a> 참고).
+      </p>
+    </div>
+
+    <h2 id="conventions">표기 규약</h2>
+    <ul>
+      <li>본문은 공식 문서를 한국어로 옮긴 <strong>요약/번역 텍스트</strong>입니다.</li>
+      <li>각 절 끝에 🔖 <em>출처</em> 링크가 있으며, 원문 확인은 그 링크를 따라가세요.</li>
+      <li>🖥️ <strong>클러스터 적용 노트</strong>는 본문(요약)이 아니라 약 20대 PM 환경에 한정한 <em>운영 조언</em>입니다. 디자인적으로 파란 박스로 구분됩니다.</li>
+      <li>버전 표기는 별도 언급이 없으면 <strong>v3.x ~ v4.x</strong> 기준입니다 (StarRocks 최신 안정 버전 4.x).</li>
+    </ul>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./01-introduction.html">다음 → 1. StarRocks 소개</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/introduction/StarRocks_intro/" target="_blank" rel="noopener">docs.starrocks.io / Introduction</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

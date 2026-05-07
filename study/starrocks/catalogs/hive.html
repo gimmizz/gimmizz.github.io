@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-1. Hive Catalog — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-hive" data-base="../"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-1. Hive</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-1. Hive Catalog</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>HMS(또는 Glue) + HDFS(또는 S3)만 지정하면 Hive 테이블을 StarRocks에서 그대로 읽고/쓸 수 있다.
+      v3.2부터는 <code>CREATE TABLE</code>·<code>INSERT</code>까지 지원되어 단순 ETL 도구로도 활용 가능.</p>
+    </div>
+
+    <h2 id="basic">6-1.1 가장 단순한 예 (HMS + HDFS, Simple 인증)</h2>
+<pre><code>CREATE EXTERNAL CATALOG hive_prod
+PROPERTIES (
+  "type" = "hive",
+  "hive.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms1.example.com:9083,thrift://hms2.example.com:9083",
+  "hadoop.security.authentication" = "simple",
+  "username" = "sr"
+);
+
+-- 사용
+SET CATALOG hive_prod;
+SHOW DATABASES;
+USE dwh;
+SELECT count(*) FROM events WHERE dt = '2026-05-07';</code></pre>
+
+    <h2 id="kerberos">6-1.2 Kerberos가 걸린 HDFS</h2>
+<pre><code>CREATE EXTERNAL CATALOG hive_kdc
+PROPERTIES (
+  "type" = "hive",
+  "hive.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083",
+  "hadoop.security.authentication" = "kerberos",
+  "kerberos_principal" = "sr/_HOST@EXAMPLE.COM",
+  "kerberos_keytab"   = "/etc/security/keytabs/sr.keytab"
+);</code></pre>
+    <p>각 FE/BE에서 <code>krb5.conf</code>가 올바른 위치에 있어야 하고,
+    <code>fe.conf</code>·<code>be.conf</code>의 <code>JAVA_OPTS</code>에 다음을 추가합니다.</p>
+<pre><code>JAVA_OPTS="$JAVA_OPTS -Djava.security.krb5.conf=/etc/krb5.conf"</code></pre>
+    <p>모든 BE에서 <code>kinit</code>을 미리 수행하거나 keytab을 통해 자동 갱신되도록 운영해야 합니다.</p>
+
+    <h2 id="s3">6-1.3 S3/MinIO 위의 Hive</h2>
+<pre><code>CREATE EXTERNAL CATALOG hive_s3
+PROPERTIES (
+  "type" = "hive",
+  "hive.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083",
+
+  -- S3
+  "aws.s3.enable_path_style_access" = "true",
+  "aws.s3.endpoint" = "https://minio.internal:9000",
+  "aws.s3.access_key" = "AKIA...",
+  "aws.s3.secret_key" = "...",
+  "aws.s3.region" = "ap-northeast-2"
+);</code></pre>
+    <p>AWS Glue를 메타스토어로 쓰는 경우 <code>"hive.metastore.type" = "glue"</code> + <code>"aws.glue.region"</code>·인증 옵션을 함께 줍니다.</p>
+
+    <h2 id="formats">6-1.4 지원 파일 포맷</h2>
+    <table>
+      <thead><tr><th>포맷</th><th>읽기</th><th>쓰기 (v3.2+)</th><th>지원 압축</th></tr></thead>
+      <tbody>
+        <tr><td>Parquet</td><td>O</td><td>O</td><td>SNAPPY, LZ4, ZSTD, GZIP, LZO(v3.1.5+)</td></tr>
+        <tr><td>ORC</td><td>O</td><td>O</td><td>ZLIB, SNAPPY, LZO, LZ4, ZSTD</td></tr>
+        <tr><td>Textfile</td><td>O</td><td>O (NO_COMPRESSION만)</td><td>LZO (v3.1.5+)</td></tr>
+        <tr><td>Avro / RCFile / SequenceFile</td><td>O</td><td>X</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p>주의: Textfile은 MAP·STRUCT 타입을 지원하지 않습니다. INTERVAL, BINARY, UNION은 모든 포맷에서 미지원.</p>
+
+    <h2 id="dml">6-1.5 INSERT / CTAS / DDL (v3.2+)</h2>
+<pre><code>-- INSERT
+INSERT INTO hive_prod.dwh.summary_d
+SELECT dt, channel, count(*) AS cnt
+FROM hive_prod.dwh.events
+WHERE dt = '2026-05-07'
+GROUP BY dt, channel;
+
+-- INSERT OVERWRITE (파티션 단위)
+INSERT OVERWRITE hive_prod.dwh.summary_d PARTITION (dt='2026-05-07')
+SELECT channel, count(*) FROM hive_prod.dwh.events WHERE dt='2026-05-07'
+GROUP BY channel;
+
+-- CREATE TABLE (Hive 테이블 자체를 StarRocks에서 만들기)
+CREATE TABLE hive_prod.dwh.summary_d (
+  channel STRING,
+  cnt     BIGINT,
+  dt      DATE
+)
+PARTITION BY (dt)
+PROPERTIES (
+  "location" = "hdfs://nn/warehouse/dwh.db/summary_d/",
+  "file_format" = "parquet",
+  "compression_codec" = "snappy"
+);</code></pre>
+
+    <h2 id="cache">6-1.6 메타데이터 캐시 옵션</h2>
+    <p>FE는 HMS 호출을 줄이기 위해 메타데이터를 캐시합니다. 카탈로그 단위로 다음 PROPERTIES를 줄 수 있습니다.</p>
+<pre><code>"enable_metastore_cache"               = "true",
+"enable_remote_file_cache"             = "true",
+"metastore_cache_refresh_interval_sec" = "60",
+"remote_file_cache_refresh_interval_sec" = "60",
+"metastore_cache_ttl_sec"              = "86400",   -- 24h
+"remote_file_cache_ttl_sec"            = "129600",  -- 36h
+"enable_cache_list_names"              = "true",
+"remote_file_cache_memory_ratio"       = "0.1"</code></pre>
+    <p>또한 FE 글로벌 옵션으로 백그라운드 자동 갱신을 켤 수 있습니다.</p>
+<pre><code># fe.conf
+enable_background_refresh_connector_metadata = true
+background_refresh_metadata_interval_millis = 600000     # 10분
+background_refresh_metadata_time_secs_since_last_access_secs = 86400  # 24h</code></pre>
+
+    <h3 id="manual-refresh">수동 새로고침</h3>
+<pre><code>REFRESH EXTERNAL TABLE hive_prod.dwh.events;
+REFRESH EXTERNAL TABLE hive_prod.dwh.events PARTITION (dt='2026-05-07');
+REFRESH CATALOG hive_prod;</code></pre>
+
+    <h2 id="datacache">6-1.7 Data Cache (외부 파일 가속)</h2>
+    <p>BE 로컬 SSD에 파일을 캐싱해 두 번째 쿼리부터는 거의 내부 테이블 속도로 응답시킵니다.</p>
+<pre><code># be.conf
+datacache_enable = true
+datacache_disk_path = "/data/sr/cache"
+datacache_disk_size = "300G"
+datacache_mem_size  = "10%"</code></pre>
+    <p>핫 파티션이 일정한 워크로드(예: 직전 7일)에서 효과가 가장 큽니다. 캐시 워밍을 의도적으로 하려면 야간에 한 번 <code>SELECT count(*) FROM hive_prod.dwh.events WHERE dt &gt;= ...</code> 같은 쿼리를 미리 돌리는 패턴이 흔합니다.</p>
+
+    <h2 id="caveats">6-1.8 자주 만나는 함정</h2>
+    <ul>
+      <li><strong>파티션이 안 보임</strong> — HMS에는 추가됐지만 StarRocks가 캐시된 메타를 보고 있는 경우. <code>REFRESH EXTERNAL TABLE</code>로 강제 새로고침.</li>
+      <li><strong>HDFS HA</strong> — <code>hdfs-site.xml</code>·<code>core-site.xml</code>을 <code>fe/conf</code>·<code>be/conf</code>에 두거나 클래스패스에 잡아야 함.</li>
+      <li><strong>Kerberos 만료</strong> — keytab 기반 자동 갱신을 잡지 않으면 8~24시간 후 일제히 실패.</li>
+      <li><strong>네임노드/HMS 호스트 이름</strong> — DNS 또는 <code>/etc/hosts</code>로 모든 BE에서 해석 가능해야 함.</li>
+      <li><strong>인증 정보 평문</strong> — 카탈로그 PROPERTIES에 access key/secret을 그대로 박지 말 것. 가능하다면 IAM Role/Instance Profile을 활용.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 사내 Hive에 붙일 때</div>
+      <ul>
+        <li><strong>Hive Catalog는 1순위</strong>: 우리 환경에서 가장 많이 쓰일 외부 카탈로그. <code>hive_prod</code> / <code>hive_dev</code> 정도로 환경별로 분리해 만드는 걸 권장.</li>
+        <li><strong>Data Cache는 SSD 1개 전용으로</strong>: 8개 SSD 중 1개를 <code>datacache_disk_path</code>에 통째로 할당 → 약 480GB/노드 × 17 BE = ~8TB의 핫 캐시. 직전 1~2주 파티션을 항상 들고 있을 정도로 충분.</li>
+        <li><strong>HMS 트래픽 보호</strong>: 기본 캐시 옵션은 1분 새로고침인데, 운영환경에서 1분이 너무 짧으면 <code>metastore_cache_refresh_interval_sec=300</code> 정도로 완화. 대신 새 파티션 적재 즉시 보고 싶다면 ETL 스크립트 끝에 <code>REFRESH EXTERNAL TABLE</code>을 넣어 명시적으로 갱신.</li>
+        <li><strong>Kerberos를 안 쓰는 사내 HDFS라면</strong> Simple 인증 + 전용 OS 계정(<code>sr</code>)으로 단순화. ACL은 HDFS path 단위로 별도 운영.</li>
+        <li><strong>쓰기는 신중하게</strong>: <code>INSERT OVERWRITE</code>는 Hive 테이블의 파일을 직접 치환합니다. 운영용 Hive 테이블에 직접 쓰지 말고, <em>StarRocks 전용 출력 영역</em>을 별도 디렉터리/DB로 두는 패턴 추천.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./index.html">← 6. 카탈로그 개요</a>
+        <a href="./jdbc-mysql.html">다음 → 6-2. JDBC (MySQL)</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/hive_catalog/" target="_blank" rel="noopener">docs.starrocks.io / Hive catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

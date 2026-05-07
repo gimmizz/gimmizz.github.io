@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3. 데이터 모델 — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="data-models" data-base="./"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 기초 / 3. 데이터 모델</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>3. 데이터 모델 — Duplicate · Aggregate · Unique · Primary Key</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks의 테이블은 4가지 모델 중 하나로 만든다. 보통은
+      <strong>Duplicate</strong>(원본 그대로) /
+      <strong>Primary Key</strong>(실시간 UPSERT)
+      두 가지를 가장 많이 쓴다. 모델은 <em>한 번 정하면 변경 불가</em>.</p>
+    </div>
+
+    <h2 id="why">3.1 왜 4가지나 있나</h2>
+    <p>
+      StarRocks는 컬럼 스토리지인 데다 <strong>키와 정렬</strong>을 어떻게 다루느냐에 따라
+      쓰기·읽기 비용이 크게 달라집니다. 워크로드 특성에 따라 선택할 수 있도록 4가지 모델을 제공합니다.
+    </p>
+    <table>
+      <thead>
+        <tr><th>모델</th><th>같은 키가 들어오면</th><th>대표 사용처</th><th>UPSERT/DELETE</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Duplicate Key</td><td>전부 별도 행으로 보존</td><td>로그/이벤트, 원본 보존이 필요한 데이터</td><td>X</td></tr>
+        <tr><td>Aggregate</td><td>집계 함수(SUM/MAX/MIN/...)로 합쳐서 1행</td><td>사전 집계 보고서, 큐브 형태 통계</td><td>X</td></tr>
+        <tr><td>Unique Key</td><td>최신 1행만 유지 (REPLACE)</td><td>변경되는 마스터 데이터(과거)</td><td>UPSERT (느린 편)</td></tr>
+        <tr><td><strong>Primary Key</strong></td><td>최신 1행만 유지 (Delete-and-Insert)</td><td>실시간 CDC, 변경 잦은 트랜잭션 데이터</td><td><strong>UPSERT/DELETE 빠름</strong></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="duplicate">3.2 Duplicate Key 테이블</h2>
+    <p>
+      가장 단순한 모델입니다. 같은 키가 들어와도 중복 제거나 집계 없이 모두 저장합니다.
+      "정렬키"로서의 키는 있지만, 그것은 <strong>정렬 + 인덱스용</strong>이지 유일성을 보장하지 않습니다.
+    </p>
+<pre><code>CREATE TABLE event_log (
+    event_time   DATETIME    NOT NULL,
+    user_id      BIGINT      NOT NULL,
+    event_type   VARCHAR(32) NOT NULL,
+    payload      STRING
+)
+DUPLICATE KEY(event_time, user_id)   -- 정렬키
+PARTITION BY RANGE(event_time) (
+    START ("2026-01-01") END ("2026-12-31") EVERY (INTERVAL 1 DAY)
+)
+DISTRIBUTED BY HASH(user_id);        -- 버킷팅</code></pre>
+    <p>
+      Append-only 적재가 매우 빠르고 컬럼 압축률이 좋아 <strong>로그/이벤트 분석의 표준 선택지</strong>입니다.
+      필터/정렬에 자주 쓰는 컬럼을 <code>DUPLICATE KEY</code>의 앞쪽에 두면 Zone Map·Bitmap 인덱스의 가지치기가 잘 됩니다.
+    </p>
+
+    <h2 id="aggregate">3.3 Aggregate 테이블</h2>
+    <p>
+      값 컬럼에 <strong>집계 함수</strong>를 미리 지정하고, 같은 키가 들어오면 자동으로 합치는 모델입니다.
+      "사전 집계된 컬럼 OLAP 큐브"에 가까운 형태입니다.
+    </p>
+<pre><code>CREATE TABLE site_stats (
+    log_date     DATE         NOT NULL,
+    site_id      INT          NOT NULL,
+    pv           BIGINT SUM   DEFAULT '0',
+    uv           BITMAP BITMAP_UNION,
+    max_dwell    INT MAX      DEFAULT '0'
+)
+AGGREGATE KEY(log_date, site_id)
+DISTRIBUTED BY HASH(site_id);</code></pre>
+    <p>
+      가능한 집계 타입: <code>SUM</code>, <code>MAX</code>, <code>MIN</code>, <code>REPLACE</code>, <code>HLL_UNION</code>(근사 카운트), <code>BITMAP_UNION</code>(정확 UV).
+      <strong>장점</strong>은 데이터가 사전에 줄어들어 디스크/쿼리 비용이 작아지는 것이고,
+      <strong>단점</strong>은 원본 행을 잃기 때문에 추후 다른 차원의 분석을 하려면 다시 적재해야 한다는 점입니다.
+    </p>
+
+    <h2 id="unique">3.4 Unique Key 테이블</h2>
+    <p>
+      같은 키의 새 데이터가 들어오면 기존 행을 <em>REPLACE</em> 합니다. 의미상 행 단위 UPSERT지만,
+      내부 구현은 "Aggregate 테이블의 모든 컬럼이 REPLACE로 지정된 형태"에 가깝습니다.
+    </p>
+<pre><code>CREATE TABLE user_profile (
+    user_id    BIGINT NOT NULL,
+    name       VARCHAR(64),
+    grade      TINYINT,
+    updated_at DATETIME
+)
+UNIQUE KEY(user_id)
+DISTRIBUTED BY HASH(user_id);</code></pre>
+    <p>
+      과거 버전 모델로, 컴팩션이 누적되면 쿼리 성능이 점점 떨어진다는 한계가 있어
+      <strong>새로운 프로젝트라면 Primary Key 모델을 쓰는 것이 권장</strong>됩니다.
+    </p>
+
+    <h2 id="primary">3.5 Primary Key 테이블 ⭐</h2>
+    <p>
+      v2.x에서 도입되어 v3.x에 안정화된 <strong>최신 권장 모델</strong>입니다.
+      메모리에 PK 인덱스를 두고, 변경이 들어오면 기존 행을 <em>delete</em> 마킹한 뒤 새 행을 <em>insert</em>하는
+      "Delete-and-Insert" 방식입니다. 결과적으로 UPSERT/DELETE를 매우 빠르게 받으면서도 컬럼 OLAP 쿼리 성능을 거의 잃지 않습니다.
+    </p>
+<pre><code>CREATE TABLE orders (
+    order_id     BIGINT      NOT NULL,
+    user_id      BIGINT      NOT NULL,
+    status       VARCHAR(32),
+    amount       DECIMAL(18, 2),
+    updated_at   DATETIME
+)
+PRIMARY KEY(order_id)
+DISTRIBUTED BY HASH(order_id)
+ORDER BY(updated_at)              -- v3.0+ 정렬키 별도 지정
+PROPERTIES (
+    "replication_num" = "3",
+    "enable_persistent_index" = "true"   -- v3.0+ 권장
+);</code></pre>
+
+    <h3 id="pk-when">언제 쓰나</h3>
+    <ul>
+      <li>Flink CDC, Debezium 등으로 들어오는 변경 스트림을 곧바로 OLAP 테이블에 반영해야 할 때.</li>
+      <li>주문/세션/계정 등 빈번하게 갱신되는 트랜잭션성 데이터.</li>
+      <li>"Mutable Lakehouse 테이블"처럼 운영 + 분석을 한 테이블에서 다 해야 할 때.</li>
+    </ul>
+
+    <h3 id="pk-persist">enable_persistent_index</h3>
+    <p>
+      PK 인덱스가 메모리에만 있으면 BE 메모리 부담이 큽니다.
+      <code>enable_persistent_index = true</code>로 켜두면 인덱스 일부를 디스크에 영속해 메모리 사용량을 줄여줍니다.
+      대용량 PK 테이블에서는 사실상 필수 옵션입니다.
+    </p>
+
+    <h2 id="sortkey">3.6 정렬키(Sort Key) 와 ORDER BY</h2>
+    <p>
+      v3.3 이후 모든 테이블 모델에서 <code>ORDER BY</code>로 정렬키를 별도 지정할 수 있습니다.
+      예전에는 키 정의가 곧 정렬키였지만, 이제는 분리됩니다 — 예컨대 PK는 <code>order_id</code>로 두되,
+      쿼리는 <code>updated_at</code>으로 자주 필터링하니 정렬은 그쪽에 맞추는 식입니다.
+    </p>
+    <ul>
+      <li>정렬키 컬럼은 <code>CREATE TABLE</code>에서 앞쪽에 정의되어야 합니다.</li>
+      <li>정렬키 길이는 <strong>36바이트 제한</strong>이 있습니다.</li>
+      <li>정렬키는 Zone Map / Prefix Index와 함께 가지치기에 사용됩니다.</li>
+    </ul>
+
+    <h2 id="distribution">3.7 파티션과 버킷</h2>
+    <p>
+      모든 모델 공통으로 데이터를 다음과 같이 분할합니다.
+    </p>
+    <ol>
+      <li><strong>파티션(PARTITION BY)</strong> — 보통 시간 컬럼 기준 RANGE 또는 EXPRESSION 파티션. 핫/콜드 분리, 보존정책에 사용.</li>
+      <li><strong>버킷(DISTRIBUTED BY)</strong> — 파티션 안에서 해시(또는 RANDOM) 분배. 버킷 하나가 하나의 Tablet.</li>
+    </ol>
+    <p>
+      v3.2 이후로는 버킷 수를 명시하지 않으면 자동(Auto Bucket)으로 정해집니다(권장).
+      예전엔 <code>BUCKETS 32</code>처럼 직접 적었지만 잘못 잡으면 성능 저하가 컸기에 자동화된 것입니다.
+    </p>
+
+    <h2 id="choose">3.8 어떤 모델을 골라야 하나</h2>
+    <table>
+      <thead><tr><th>상황</th><th>권장 모델</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td>로그/이벤트 분석, 원본 보존</td><td>Duplicate Key</td><td>Append-only, 압축률 최고</td></tr>
+        <tr><td>대시보드용 사전 집계 (예: 일자별 PV/UV)</td><td>Aggregate</td><td>저장 비용·쿼리 비용 절감, BITMAP 정확 UV 가능</td></tr>
+        <tr><td>실시간 CDC, 잦은 UPDATE</td><td>Primary Key</td><td>UPSERT/DELETE 빠르고 OLAP 쿼리 성능도 유지</td></tr>
+        <tr><td>레거시(이전 버전 호환)</td><td>Unique Key</td><td>새 프로젝트는 Primary Key가 더 좋음</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout warn">
+      <div class="callout-title">⚠️ 주의</div>
+      <ul>
+        <li>테이블 모델은 <strong>생성 후 변경 불가</strong>. 잘못 골랐다면 새 테이블을 만들고 <code>INSERT INTO ... SELECT</code>로 옮겨야 함.</li>
+        <li>키/정렬키 컬럼 순서는 컬럼 정의 순서를 따름.</li>
+        <li>Aggregate 테이블의 값 컬럼은 한 번 정한 집계 함수에 종속됨.</li>
+      </ul>
+    </div>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 우리 환경에서의 모델 선택 기조</div>
+      <p>
+        외부 카탈로그(Hive/HDFS/MySQL 등)를 직접 쿼리할 때는 <em>StarRocks의 테이블 모델 선택과 무관</em>합니다 — 외부 데이터를 그대로 읽기 때문이죠.
+        StarRocks 내부 테이블을 만드는 경우는 다음 두 갈래로 단순화하면 운영이 깔끔합니다.
+      </p>
+      <ul>
+        <li>"외부에서 가져와서 빠르게 보고 싶다" → Async Materialized View로 만든다 (모델 선택을 직접 안 해도 됨).</li>
+        <li>"내부 마트 테이블로 보존한다" → 기본은 <strong>Primary Key</strong>를 권장. 메모리 256GB가 넉넉하므로 PK 인덱스 부담을 충분히 받아낼 수 있고, <code>enable_persistent_index</code>로 안전망을 깐다.</li>
+      </ul>
+      <p>
+        SSD 480GB × 8 = ~3.84TB / 노드. 약 17대 BE라면 raw 65TB, 3복제 환산 시 22TB 정도가 사용 가능한 내부 스토리지 상한입니다.
+        외부 카탈로그를 활용하면 이 상한 안에서 충분히 운영 가능합니다 — <em>모든 데이터를 내부에 들고 가려 하지 말 것</em>.
+      </p>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./02-architecture.html">← 2. 아키텍처</a>
+        <a href="./04-deployment.html">다음 → 4. 배포</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/table_design/table_types/" target="_blank" rel="noopener">docs.starrocks.io / Table types</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-3. Iceberg / Hudi Catalog — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-iceberg" data-base="../"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-3. Iceberg / Hudi</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-3. Iceberg · Hudi · Delta · Unified</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks는 데이터 레이크 포맷을 1급 시민으로 다룬다. <strong>Iceberg</strong>는 v2.4+, <strong>Hudi</strong> v2.4+,
+      <strong>Delta</strong> v2.5+, 그리고 v3.2부터 이들을 한 카탈로그로 묶는 <strong>Unified Catalog</strong>가 있다.</p>
+    </div>
+
+    <h2 id="iceberg">6-3.1 Iceberg Catalog</h2>
+    <p>Iceberg 테이블은 카탈로그 종류가 다양합니다 — HMS, Glue, REST, JDBC, Tabular, Hadoop. StarRocks는 이 중 주요 카탈로그를 지원합니다.</p>
+<pre><code>-- HMS 기반 Iceberg
+CREATE EXTERNAL CATALOG iceberg_hms
+PROPERTIES (
+  "type"                    = "iceberg",
+  "iceberg.catalog.type"    = "hive",
+  "hive.metastore.uris"     = "thrift://hms.example.com:9083",
+  "aws.s3.endpoint"         = "https://minio.internal:9000",
+  "aws.s3.access_key"       = "...",
+  "aws.s3.secret_key"       = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);
+
+-- REST Catalog (Tabular, Lakekeeper 등)
+CREATE EXTERNAL CATALOG iceberg_rest
+PROPERTIES (
+  "type"                 = "iceberg",
+  "iceberg.catalog.type" = "rest",
+  "iceberg.catalog.uri"  = "https://rest.lakehouse.example.com",
+  "iceberg.catalog.warehouse" = "s3://warehouse/"
+);
+
+-- Glue 기반
+CREATE EXTERNAL CATALOG iceberg_glue
+PROPERTIES (
+  "type" = "iceberg",
+  "iceberg.catalog.type" = "glue",
+  "aws.glue.region" = "ap-northeast-2",
+  "aws.glue.use_instance_profile" = "true"
+);</code></pre>
+
+    <h3 id="iceberg-feat">Iceberg에서 활용 가능한 기능</h3>
+    <ul>
+      <li><strong>Time travel</strong>: <code>SELECT * FROM ic.db.tbl FOR VERSION AS OF 12345</code>, <code>FOR TIMESTAMP AS OF '2026-05-01 00:00:00'</code></li>
+      <li><strong>스냅샷 메타데이터 쿼리</strong>: <code>SELECT * FROM ic.db.tbl$snapshots</code> (시스템 메타 테이블)</li>
+      <li><strong>v3.x 쓰기 지원</strong>: <code>INSERT</code>, <code>CREATE TABLE</code>, <code>ALTER TABLE</code>, 파티션 진화 일부 지원</li>
+      <li><strong>Equality/Position Delete 파일</strong> 처리</li>
+    </ul>
+
+    <h2 id="hudi">6-3.2 Hudi Catalog</h2>
+<pre><code>CREATE EXTERNAL CATALOG hudi_hms
+PROPERTIES (
+  "type"                = "hudi",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083"
+);</code></pre>
+    <p>Hudi는 두 가지 테이블 종류가 있고, StarRocks가 둘 다 지원합니다.</p>
+    <ul>
+      <li><strong>CoW (Copy-on-Write)</strong>: 갱신 시 새 파일을 만든다. 읽기 단순, 쓰기 비용 큼.</li>
+      <li><strong>MoR (Merge-on-Read)</strong>: 갱신은 로그 파일에 적고 읽을 때 머지. 쓰기 가벼움, 읽기 시 머지 비용.</li>
+    </ul>
+    <p>StarRocks는 두 종류 모두 읽기 지원합니다. MoR의 경우 컴팩션이 잘 되어 있어야 쿼리 성능이 좋습니다.</p>
+
+    <h2 id="delta">6-3.3 Delta Lake Catalog</h2>
+<pre><code>CREATE EXTERNAL CATALOG delta_hms
+PROPERTIES (
+  "type"                = "deltalake",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083",
+  "aws.s3.access_key"   = "...",
+  "aws.s3.secret_key"   = "..."
+);</code></pre>
+    <p>Delta Lake의 transaction log(<code>_delta_log</code>)를 직접 읽어 정확한 스냅샷 뷰를 제공합니다.</p>
+
+    <h2 id="unified">6-3.4 Unified Catalog (v3.2+)</h2>
+    <p>
+      한 HMS에 Hive parquet/Iceberg/Hudi/Delta 테이블이 섞여 있을 때, 4개 카탈로그를 따로 만들지 않고 하나로 묶을 수 있습니다.
+    </p>
+<pre><code>CREATE EXTERNAL CATALOG unified
+PROPERTIES (
+  "type"                = "unified",
+  "unified.metastore.type" = "hive",
+  "hive.metastore.uris" = "thrift://hms.example.com:9083",
+  "aws.s3.endpoint"     = "https://minio.internal:9000",
+  "aws.s3.access_key"   = "...",
+  "aws.s3.secret_key"   = "..."
+);</code></pre>
+    <p>StarRocks가 테이블 형식을 자동 인식해서 적절한 리더를 사용합니다.</p>
+
+    <h2 id="storage">6-3.5 스토리지 인증</h2>
+    <p>Hive Catalog와 동일합니다. HDFS는 Simple/Kerberos, S3 호환은 access/secret 키 또는 IAM/Instance Profile.</p>
+
+    <h2 id="caveats">6-3.6 주의사항</h2>
+    <ul>
+      <li><strong>Iceberg V2 (delete file)</strong>: BE 메모리에 부담을 줄 수 있음. 큰 delete 파일이 많은 테이블은 정기적으로 컴팩션 권장.</li>
+      <li><strong>Hudi MoR</strong>: 컴팩션이 누적되면 머지 비용이 폭증. <code>hoodie.compact</code> 정책 점검.</li>
+      <li><strong>Delta deletion vector</strong>: v3.x에서 단계적 지원 — 사용 중인 StarRocks 버전 릴리스 노트 확인.</li>
+      <li><strong>스키마 진화</strong>: Iceberg는 컬럼 추가·이름 변경에 강함. Hive parquet은 신중하게.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 데이터 레이크 카탈로그 운영 가이드</div>
+      <ul>
+        <li><strong>HMS 안에 다양한 포맷이 섞여 있다면 Unified Catalog 1순위</strong>: 운영자/사용자에게 카탈로그 이름이 하나로 보여 헷갈리지 않습니다.</li>
+        <li><strong>Iceberg/Hudi의 메타 캐시</strong>: Hive보다 메타 객체가 풍부해서 첫 메타 로딩이 느릴 수 있습니다. 카탈로그 생성 직후 자주 쓰는 테이블에 한 번 쿼리를 던져 메타 캐시를 워밍업하면 사용자 체감이 좋아집니다.</li>
+        <li><strong>S3가 사내 MinIO인 경우</strong>: <code>aws.s3.enable_path_style_access = true</code>를 잊지 말 것. 또한 <code>aws.s3.endpoint</code>는 BE 모두에서 도달 가능한 주소여야 합니다.</li>
+        <li><strong>Time travel은 신중히</strong>: 사용자 권한이 있다면 강력하지만, 잘못된 시점 쿼리가 분석을 오염시킬 수 있습니다. BI 도구에 직접 노출하지 말고, 데이터 사이언스 워크벤치에서만 허용하는 식의 운영 정책이 안전.</li>
+        <li><strong>Iceberg 쓰기 도입은 단계적으로</strong>: StarRocks의 Iceberg 쓰기는 v3.x에서 빠르게 발전 중입니다. 운영 테이블에는 한 번에 적용하기보다 dev 카탈로그에서 회귀 테스트 후 도입.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./jdbc-mysql.html">← 6-2. JDBC</a>
+        <a href="../06-query-mv.html">다음 → 7. 쿼리 / MV</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/data_source/catalog/iceberg/iceberg_catalog/" target="_blank" rel="noopener">/Iceberg catalog</a>,
+          <a href="https://docs.starrocks.io/docs/data_source/catalog/hudi_catalog/" target="_blank" rel="noopener">/Hudi catalog</a>,
+          <a href="https://docs.starrocks.io/docs/data_source/catalog/deltalake_catalog/" target="_blank" rel="noopener">/Delta Lake catalog</a>,
+          <a href="https://docs.starrocks.io/docs/data_source/catalog/unified_catalog/" target="_blank" rel="noopener">/Unified catalog</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

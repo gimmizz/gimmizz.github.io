@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2. 아키텍처 — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="architecture" data-base="./"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 기초 / 2. 아키텍처</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>2. 아키텍처 — FE / BE / CN과 두 가지 모드</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks는 <strong>FE</strong>(메타데이터·옵티마이저)와 <strong>BE</strong>(스토리지+실행) 두 종류 노드만 있다.
+      외부 의존(ZK·HMS·etcd 등) 없이도 동작한다. 스토리지 분리가 필요하면 BE 자리에 stateless인 <strong>CN</strong>을 두고
+      객체 스토리지를 붙이는 <em>Shared-data</em> 모드를 쓴다.</p>
+    </div>
+
+    <h2 id="overview">2.1 전체 그림</h2>
+    <p>
+      StarRocks 클러스터는 두 종류의 노드만으로 구성됩니다.
+    </p>
+
+<pre><code>             ┌──────────────────────────────┐
+   클라이언트  │ MySQL CLI · JDBC · BI 도구    │
+             └──────────────┬───────────────┘
+                            │ MySQL 프로토콜 (port 9030)
+                  ┌─────────┴─────────┐
+                  │       FE (3대)    │  ← 메타데이터, 옵티마이저
+                  │  Leader/Follower/ │  ← Raft(BDB JE) 동기화
+                  │       Observer    │
+                  └─────────┬─────────┘
+                            │ Thrift (port 9020) 등
+        ┌───────────┬───────┴────────┬────────────┐
+        │           │                │            │
+   ┌────▼──┐   ┌────▼──┐        ┌────▼──┐    ┌────▼──┐
+   │ BE 1  │   │ BE 2  │   …    │ BE N  │    │ ...   │   ← 데이터 저장 + 쿼리 실행
+   │ Local │   │ Local │        │ Local │    │       │
+   │ SSDx8 │   │ SSDx8 │        │ SSDx8 │    │       │
+   └───────┘   └───────┘        └───────┘    └───────┘
+</code></pre>
+
+    <p>
+      외부 의존성이 거의 없습니다. ZooKeeper도, etcd도, 별도 메타스토어도 필요 없습니다 — FE에 BDB JE가 내장되어 있기 때문입니다.
+      이 단순함이 운영 측면에서 큰 이점입니다.
+    </p>
+
+    <h2 id="fe">2.2 FE (Frontend) 노드</h2>
+    <p>FE의 책임은 다음 네 가지입니다.</p>
+    <ol>
+      <li><strong>메타데이터 관리</strong> — 테이블, 컬럼, 파티션, Tablet 위치, 권한 등을 보관.</li>
+      <li><strong>클라이언트 연결</strong> — MySQL 프로토콜로 클라이언트 수용.</li>
+      <li><strong>SQL 파싱 + 옵티마이저(CBO)</strong> — 논리 플랜 → 물리 플랜.</li>
+      <li><strong>스케줄링</strong> — 만들어진 플랜 단편을 BE에 분배·조정.</li>
+    </ol>
+
+    <h3 id="fe-roles">FE 역할 — Leader / Follower / Observer</h3>
+    <table>
+      <thead><tr><th>역할</th><th>읽기</th><th>쓰기</th><th>리더 선출 참여</th><th>특징</th></tr></thead>
+      <tbody>
+        <tr><td>Leader</td><td>O</td><td>O</td><td>O</td><td>메타데이터 쓰기를 단독 수행. 변경사항을 BDB JE Raft로 다른 FE에 복제.</td></tr>
+        <tr><td>Follower</td><td>O</td><td>X</td><td>O</td><td>Leader 후보. Leader 장애 시 자동 승격.</td></tr>
+        <tr><td>Observer</td><td>O</td><td>X</td><td>X</td><td>읽기 분산용. 선출에 끼지 않으므로 다수 추가해도 클러스터 부담이 작음.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      <strong>Follower 과반(quorum)</strong>이 살아 있어야 메타데이터 쓰기가 성공합니다. 따라서 FE는 거의 항상 <strong>홀수(3, 5, 7)</strong>로 둡니다.
+      메타데이터 변경은 Follower 과반 동기화가 끝난 다음에야 클라이언트에 success가 반환됩니다.
+    </p>
+
+    <h3 id="fe-storage">FE의 메타데이터 저장</h3>
+    <p>
+      FE는 메타데이터를 메모리에 캐시하면서 동시에 디스크의 BDB JE에 영속합니다.
+      모든 FE가 메타데이터의 <em>완전 사본</em>을 들고 있다는 점이 중요합니다 — 어느 FE를 읽어도 같은 결과가 나오고,
+      Leader가 죽으면 Follower 중 하나가 즉시 Leader가 됩니다.
+    </p>
+    <ul>
+      <li>FE 메타 디렉터리: <code>fe/meta</code></li>
+      <li>FE 로그 디렉터리: <code>fe/log</code></li>
+    </ul>
+
+    <h2 id="be">2.3 BE (Backend) 노드</h2>
+    <p>
+      BE는 두 가지 일을 동시에 합니다.
+    </p>
+    <ol>
+      <li><strong>데이터 저장</strong> — 로컬 SSD에 컬럼 형식으로 저장하고, 인덱스(Bitmap, Bloom Filter, Zone Map 등)를 함께 만듦.</li>
+      <li><strong>쿼리 실행</strong> — FE에서 받은 물리 플랜 단편을 벡터화 엔진으로 처리.</li>
+    </ol>
+    <p>
+      이 "데이터를 가진 노드가 그 데이터를 직접 처리한다(<em>data locality</em>)" 원칙 덕분에
+      Shared-nothing 모드에서는 네트워크 셔플이 최소화되어 매우 빠르게 동작합니다.
+    </p>
+
+    <h3 id="be-storage">BE의 디스크 구성</h3>
+    <p>
+      BE 설정 파일 <code>be/conf/be.conf</code>의 <strong><code>storage_root_path</code></strong>에 디스크 경로를 콤마로 나열합니다.
+    </p>
+<pre><code># 예시: 8개 SSD를 모두 BE 스토리지로 사용
+storage_root_path = /data/sr/disk1;/data/sr/disk2;/data/sr/disk3;/data/sr/disk4;/data/sr/disk5;/data/sr/disk6;/data/sr/disk7;/data/sr/disk8</code></pre>
+    <p>
+      BE는 Tablet을 디스크들에 자동으로 분산 배치합니다. 디스크당 매체(SSD/HDD)도 함께 명시할 수 있습니다(<code>;medium=ssd</code>).
+      매체 정보는 핫/콜드 데이터 분리(Storage Tier)에서 사용됩니다.
+    </p>
+
+    <h3 id="tablet">Tablet — 데이터 분배 단위</h3>
+    <p>
+      StarRocks 테이블은 다음과 같이 분할됩니다.
+    </p>
+<pre><code>테이블
+ └─ 파티션 (예: 일자별)
+     └─ 버킷 = Tablet (해시 분배)
+         └─ 복제본 N개 (보통 3)</code></pre>
+    <p>
+      복제본은 서로 다른 BE에 배치되어 단일 BE 장애에서도 쿼리가 가능합니다.
+      클러스터 리밸런스, 복구, 마이그레이션 모두 Tablet 단위로 일어납니다.
+    </p>
+
+    <h2 id="cn">2.4 CN (Compute Node)</h2>
+    <p>
+      CN은 BE에서 <strong>스토리지 책임만 떼어낸 stateless 노드</strong>입니다.
+      데이터는 외부 객체 스토리지(S3, OSS, MinIO, Azure Blob, GCS, HDFS)에 두고, CN은 로컬 디스크/메모리에 캐시만 보관합니다.
+    </p>
+    <ul>
+      <li>몇 초 내에 추가/제거 가능 (데이터 리밸런스 불필요).</li>
+      <li>비용 효율적 — 객체 스토리지가 일반적으로 SSD보다 GB당 저렴.</li>
+      <li>탄력적 — 야간/낮 시간대에 따라 CN 수를 늘렸다 줄였다 가능.</li>
+    </ul>
+    <p>
+      단, External Catalog를 쓰는 워크로드라면 BE에서도 데이터 레이크 직접 쿼리가 가능하므로,
+      CN은 주로 <strong>StarRocks 자체 데이터를 객체 스토리지에 두는 Shared-data 모드</strong>에 사용된다고 이해하면 됩니다.
+    </p>
+
+    <h2 id="modes">2.5 두 가지 배포 모드 — Shared-Nothing vs Shared-Data</h2>
+    <table>
+      <thead>
+        <tr><th>구분</th><th>Shared-Nothing (기본)</th><th>Shared-Data</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>노드 구성</td><td>FE + BE</td><td>FE + CN + 객체 스토리지/HDFS</td></tr>
+        <tr><td>데이터 위치</td><td>BE 로컬 SSD</td><td>객체 스토리지 (CN은 캐시만)</td></tr>
+        <tr><td>복제</td><td>Tablet N복제 (보통 3)</td><td>객체 스토리지의 내구성에 위임 (단일 사본)</td></tr>
+        <tr><td>확장</td><td>BE 추가 시 Tablet 리밸런스 필요</td><td>CN 추가/제거 즉시 효과</td></tr>
+        <tr><td>비용</td><td>SSD 사용량에 비례</td><td>객체 스토리지 + 일부 캐시 SSD</td></tr>
+        <tr><td>최적 워크로드</td><td>저지연 쿼리, 고동시성</td><td>탄력적 스케일, 비용 절감, 데이터 공유</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="shared-data-cache">Shared-Data 모드의 캐시 계층</h3>
+    <p>
+      Shared-data 모드에서는 데이터가 원격(객체 스토리지)에 있으므로 매번 가져오면 느립니다.
+      CN은 <strong>메모리 → 로컬 디스크 → 원격</strong>의 3단 계층 캐시를 운용합니다.
+    </p>
+    <ul>
+      <li>핫 데이터는 캐시에서 직접 스캔.</li>
+      <li>콜드 데이터는 원격에서 읽으며 동시에 캐시에 기록(Prefetch + 채워넣기).</li>
+      <li>테이블 생성 시 캐싱 옵션을 켜면 쓰기도 로컬·원격 양쪽에 함께 발생.</li>
+    </ul>
+
+    <h2 id="query-flow">2.6 쿼리 처리 흐름</h2>
+    <ol>
+      <li>클라이언트가 MySQL 프로토콜로 <strong>FE</strong>에 접속.</li>
+      <li>FE 파서가 SQL → AST → 논리 플랜 생성.</li>
+      <li>CBO가 통계를 보고 <strong>물리 플랜(Fragment)</strong>으로 변환.</li>
+      <li>FE 코디네이터가 Fragment를 데이터 보유 BE/CN에 분배.</li>
+      <li>BE/CN이 벡터화 엔진으로 단편을 실행. 필요시 Exchange로 데이터 셔플.</li>
+      <li>최종 단편이 결과를 모아 FE를 거쳐 클라이언트에 반환.</li>
+    </ol>
+
+    <h2 id="ports">2.7 주요 포트</h2>
+    <table>
+      <thead><tr><th>노드</th><th>포트</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td>FE</td><td>9030</td><td>MySQL 프로토콜 (클라이언트 접속)</td></tr>
+        <tr><td>FE</td><td>8030</td><td>HTTP (FE Web UI / REST)</td></tr>
+        <tr><td>FE</td><td>9010</td><td>FE ↔ FE 내부(Edit Log Port, BDB)</td></tr>
+        <tr><td>FE</td><td>9020</td><td>RPC (BE와의 통신)</td></tr>
+        <tr><td>BE</td><td>9060</td><td>BE ↔ BE 셔플 RPC</td></tr>
+        <tr><td>BE</td><td>8040</td><td>HTTP (BE Web UI / 데이터 적재)</td></tr>
+        <tr><td>BE</td><td>9050</td><td>Heartbeat</td></tr>
+        <tr><td>BE</td><td>8060</td><td>Brpc (Backend 내부 RPC)</td></tr>
+      </tbody>
+    </table>
+    <p class="source-cite"><a href="https://docs.starrocks.io/docs/deployment/deployment_overview/" target="_blank" rel="noopener">docs.starrocks.io / Deployment overview</a> (포트 정보)</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 약 20대 PM에서의 노드 배치</div>
+      <p>
+        FE는 메모리·디스크 사용량은 적지만 안정성이 매우 중요하므로, <strong>FE 3대를 별도 PM 3대에 분리</strong>하는 게 정석입니다.
+        BE와 같은 PM에 두면 BE가 메모리/CPU를 잡아먹을 때 FE의 응답성이 떨어질 수 있습니다.
+      </p>
+      <ul>
+        <li>FE: 3대 (Follower 1 + Follower 2 + Follower 3 / 그중 1대가 Leader). 5대까지 늘릴 필요는 약 20대 규모에선 거의 없음.</li>
+        <li>BE: 나머지 약 17대 모두. <code>storage_root_path</code>에 SSD 8개 경로를 모두 등록.</li>
+        <li>Observer는 BI/대시보드 트래픽이 큰 경우 1~2대 추가 검토(읽기 분산).</li>
+      </ul>
+      <p>
+        장애 시나리오: BE 1대가 죽어도 Tablet 3복제이므로 쿼리는 계속 처리됩니다.
+        FE 1대가 죽어도 Leader는 자동 재선출됩니다(2대 Follower 잔존 → quorum 유지).
+      </p>
+    </div>
+
+    <h2 id="design-principles">2.8 설계 철학</h2>
+    <ul>
+      <li><strong>단순함</strong> — 외부 의존 없음. 노드 종류 2~3가지.</li>
+      <li><strong>현대적 하드웨어를 전제</strong> — SIMD, 큰 메모리, NVMe SSD를 가정한 벡터화 엔진.</li>
+      <li><strong>"하나의 엔진으로 다양한 워크로드"</strong> — 칼럼 OLAP인데 UPSERT 가능. 자체 스토리지인데 외부 카탈로그도 흡수.</li>
+      <li><strong>MySQL 친화</strong> — 운영자/분석가의 기존 도구를 그대로 쓰게 함.</li>
+    </ul>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./01-introduction.html">← 1. 소개</a>
+        <a href="./03-data-models.html">다음 → 3. 데이터 모델</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/introduction/Architecture/" target="_blank" rel="noopener">docs.starrocks.io / Architecture</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

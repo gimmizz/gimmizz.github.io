@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>8. 튜닝 가이드 — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="tuning" data-base="./"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 활용 / 8. 튜닝</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>8. 튜닝 가이드 — 약 20대 PM 환경 기준</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>대부분의 튜닝은 (1) BE 메모리 분배, (2) Compaction, (3) MV·Data Cache, (4) 동시성·세션 변수 — 이 4가지에서 끝난다.</p>
+    </div>
+
+    <h2 id="be-mem">8.1 BE 메모리 분배</h2>
+    <p>BE의 메모리는 다음과 같이 나뉘어 사용됩니다.</p>
+    <table>
+      <thead><tr><th>구획</th><th>역할</th><th>대표 옵션</th></tr></thead>
+      <tbody>
+        <tr><td>전체 한도</td><td>BE가 쓸 수 있는 OS 메모리의 상한</td><td><code>mem_limit</code> (보통 80%)</td></tr>
+        <tr><td>쿼리 풀</td><td>실행 중 쿼리들이 사용</td><td><code>query_mem_limit</code>(세션) / <code>load_mem_limit</code></td></tr>
+        <tr><td>Page Cache</td><td>컬럼 페이지 캐시</td><td><code>storage_page_cache_limit</code></td></tr>
+        <tr><td>Data Cache</td><td>외부 카탈로그 데이터 캐시</td><td><code>datacache_mem_size</code></td></tr>
+        <tr><td>PK Index</td><td>Primary Key 인덱스</td><td><code>enable_persistent_index</code> (테이블 옵션)</td></tr>
+        <tr><td>Compaction</td><td>컴팩션 워커</td><td><code>compaction_mem_limit</code></td></tr>
+      </tbody>
+    </table>
+<pre><code># be.conf 예시 (256GB / 노드 가정)
+mem_limit                  = 80%       # OS 메모리의 80%
+storage_page_cache_limit   = 20%
+datacache_mem_size         = 10%
+compaction_mem_limit       = 10%</code></pre>
+
+    <h2 id="disk">8.2 디스크 — SSD 8개를 모두 활용하기</h2>
+<pre><code># be.conf
+storage_root_path = /data/sr/disk1,medium:SSD;\
+                    /data/sr/disk2,medium:SSD;\
+                    /data/sr/disk3,medium:SSD;\
+                    /data/sr/disk4,medium:SSD;\
+                    /data/sr/disk5,medium:SSD;\
+                    /data/sr/disk6,medium:SSD;\
+                    /data/sr/disk7,medium:SSD;\
+                    /data/sr/disk8,medium:SSD</code></pre>
+    <p>
+      BE는 8개 디스크에 Tablet을 라운드로빈으로 분산합니다 — 한 디스크가 병목이 되지 않도록.
+      <strong>같은 PM 안</strong>에서도 디스크별 사용률을 주기적으로 확인하세요(<code>SHOW PROC '/backends/&lt;id&gt;/disks';</code>).
+      특정 디스크가 과편향이면 Tablet 마이그레이션이나 디스크 추가/제거를 검토.
+    </p>
+
+    <h2 id="compaction">8.3 Compaction</h2>
+    <p>
+      적재가 빈번하면 작은 segment 파일이 많아져서 쿼리 시 머지 비용이 커집니다. 컴팩션이 그것을 정리합니다.
+      가장 자주 보는 지표는 <strong>compaction score</strong>로, 이 값이 100을 넘으면 적체 신호입니다.
+    </p>
+<pre><code># be.conf — Compaction 워커 수
+base_compaction_num_threads_per_disk        = 1
+cumulative_compaction_num_threads_per_disk  = 1
+update_compaction_num_threads_per_disk      = 1   # PK 테이블용
+
+# 적체가 큰 환경에서는 디스크당 워커를 늘릴 수 있음
+# 단 너무 늘리면 쿼리 IO와 경쟁</code></pre>
+
+    <h2 id="datacache">8.4 Data Cache (외부 카탈로그용)</h2>
+<pre><code># be.conf
+datacache_enable    = true
+datacache_disk_path = "/data/sr/cache"   # 디스크 1개 전용 권장
+datacache_disk_size = "400G"             # 디스크 용량의 90% 정도
+datacache_mem_size  = "10%"</code></pre>
+
+    <h2 id="parallel">8.5 쿼리 동시성 / 병렬도</h2>
+<pre><code>-- 세션 변수
+SET parallel_fragment_exec_instance_num = 8;   -- BE당 fragment 인스턴스 수
+SET pipeline_dop = 0;                          -- 0이면 자동 (코어 수 기반)
+SET query_mem_limit = 32 * 1024 * 1024 * 1024; -- 32GB
+
+-- 글로벌로 두려면
+SET GLOBAL parallel_fragment_exec_instance_num = 8;</code></pre>
+    <p>
+      <code>pipeline_dop = 0</code>이 기본 권장. 명시적으로 줄이는 건 하나의 무거운 쿼리가 노드 전체를 먹는 걸 막을 때.
+    </p>
+
+    <h2 id="rg">8.6 Resource Group으로 워크로드 격리</h2>
+<pre><code>CREATE RESOURCE GROUP rg_bi
+WITH (
+  'cpu_core_limit'    = '8',
+  'mem_limit'         = '30%',
+  'concurrency_limit' = '20',
+  'type' = 'normal'
+);
+
+CREATE RESOURCE GROUP rg_etl
+WITH (
+  'cpu_core_limit'    = '24',
+  'mem_limit'         = '50%',
+  'concurrency_limit' = '8',
+  'type' = 'normal'
+);</code></pre>
+
+    <h2 id="adaptive">8.7 자주 쓰는 옵티마이저 세션 변수</h2>
+    <table>
+      <thead><tr><th>변수</th><th>의미</th><th>권장</th></tr></thead>
+      <tbody>
+        <tr><td><code>enable_pipeline_engine</code></td><td>파이프라인 엔진 사용</td><td>true (기본)</td></tr>
+        <tr><td><code>enable_materialized_view_rewrite</code></td><td>MV 자동 재작성</td><td>true</td></tr>
+        <tr><td><code>enable_global_runtime_filter</code></td><td>글로벌 RuntimeFilter</td><td>true</td></tr>
+        <tr><td><code>enable_local_shuffle_agg</code></td><td>BE 내 로컬 셔플 집계</td><td>true</td></tr>
+        <tr><td><code>cbo_enable_low_cardinality_optimize</code></td><td>저카디널리티 사전 압축 활용</td><td>true</td></tr>
+        <tr><td><code>broadcast_row_limit</code></td><td>이 행수 이하면 Broadcast Join 우선</td><td>15M ~ 50M (테이블 크기에 따라)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="profile">8.8 Query Profile 활용</h2>
+<pre><code>SET enable_profile = true;
+SELECT ...; -- 쿼리 실행
+
+SHOW PROFILELIST;
+SHOW PROFILE FROM 'profile_id';</code></pre>
+    <p>
+      Profile은 각 Operator의 시간/처리 행수/메모리를 보여줍니다.
+      가장 큰 단일 시간이 어디서 나오는지 — Scan, Hash Join Build, Aggregate, Exchange — 를 본 다음 그 부분에 맞는 튜닝을 합니다.
+    </p>
+
+    <h2 id="checklist">8.9 성능 점검 체크리스트</h2>
+    <ol>
+      <li>통계가 최신인가? <code>SHOW STATS META FOR ...;</code></li>
+      <li>EXPLAIN 결과의 cardinality 추정이 실제와 비슷한가?</li>
+      <li>의도한 JOIN 전략으로 풀리는가? 셔플 양이 과한가?</li>
+      <li>Tablet 수가 충분히 많고 디스크 8개에 잘 분산되어 있는가?</li>
+      <li>Compaction Score가 100을 넘지 않는가?</li>
+      <li>외부 카탈로그 쿼리는 Data Cache 히트율이 충분한가?</li>
+      <li>같은 결합/집계가 반복된다면 Async MV 후보인가?</li>
+      <li>대시보드 트래픽과 ETL이 한 Resource Group에 섞여 있는가?</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 약 20대 PM에서의 튜닝 시작점</div>
+      <ul>
+        <li><strong>BE 256GB 메모리 분배 예시</strong>: <code>mem_limit=80%</code> ≈ 200GB → 그 안에서 query 풀 100GB / page cache 50GB / data cache 30GB / compaction 20GB. 실측을 보고 미세 조정.</li>
+        <li><strong>SSD 8개 활용</strong>: 8개 모두 <code>storage_root_path</code>에 등록. 또는 7개 + 1개(Data Cache 전용) 분리. 외부 카탈로그가 무겁다면 후자가 효과적.</li>
+        <li><strong>Compaction 워커</strong>: PK 테이블을 많이 쓰면 <code>update_compaction_num_threads_per_disk = 2~3</code>으로 늘려 적체 방지. 단, 쿼리 IO와 경쟁하므로 모니터링 후 조정.</li>
+        <li><strong>네트워크</strong>: 셔플 비용은 결국 NIC 대역폭에 직격. 10GbE면 한 BE당 1GB/s 정도가 한계. 큰 셔플이 자주 발생하면 Bond/25GbE를 검토.</li>
+        <li><strong>RuntimeFilter</strong>: 큰 테이블 - 작은 테이블 조인이 많은 워크로드라면 글로벌 RuntimeFilter가 잘 동작합니다 (기본 켜짐).</li>
+        <li><strong>Tablet 수의 안전대</strong>: 한 BE당 Tablet이 수만~십수만이 되면 메타 부담이 커집니다. 약 17 BE × 디스크 8 ≒ Tablet이 너무 적게 잡히지 않게 파티션·버킷 수를 적절히. v3.2+의 Auto Bucket이 보통 잘 잡아 줍니다.</li>
+        <li><strong>관측 우선</strong>: 모든 튜닝의 출발점은 Grafana 대시보드(Compaction Score, Mem Used, IO Util, Query QPS)입니다. 추측보다 그래프.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./06-query-mv.html">← 7. 쿼리 / MV</a>
+        <a href="./index.html">홈으로</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/administration/Configuration/" target="_blank" rel="noopener">docs.starrocks.io / Configuration</a>,
+          <a href="https://docs.starrocks.io/docs/administration/management/resource_management/resource_group/" target="_blank" rel="noopener">/Resource group</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

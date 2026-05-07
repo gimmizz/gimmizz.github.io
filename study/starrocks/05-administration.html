@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>5. 운영 · 백업 · 모니터링 — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="administration" data-base="./"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 클러스터 운영 / 5. 운영</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>5. 운영 · 백업 · 모니터링</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks의 일상 운영 작업은 거의 SQL로 끝난다. <code>SHOW BACKENDS</code>·<code>ALTER SYSTEM</code>·<code>BACKUP/RESTORE</code> 세 가지가 가장 많이 쓰이는 명령군.</p>
+    </div>
+
+    <h2 id="cluster-state">5.1 클러스터 상태 점검</h2>
+    <p>일상적으로 가장 자주 두드리는 SQL.</p>
+<pre><code>-- FE 노드 상태
+SHOW FRONTENDS;
+
+-- BE 노드 상태 (Alive, TabletNum, DataUsedCapacity, MaxDiskUsedPct 등)
+SHOW BACKENDS;
+
+-- BE 디스크별 사용률
+SHOW BACKENDS\G   -- '\G' 는 MySQL CLI의 vertical 출력
+SHOW PROC '/backends/&lt;backend_id&gt;/disks';
+
+-- 최근 진행 중인 적재
+SHOW LOAD WHERE STATE != 'FINISHED';
+
+-- 진행 중 / 최근 쿼리
+SHOW PROCESSLIST;
+SHOW PROC '/current_queries';</code></pre>
+
+    <h2 id="add-remove">5.2 노드 추가 / 제거</h2>
+    <h3 id="add-be">BE 추가</h3>
+    <ol>
+      <li>새 PM에 StarRocks 바이너리를 설치하고 <code>be.conf</code>의 <code>storage_root_path</code>·<code>priority_networks</code>를 맞춘다.</li>
+      <li>FE에 등록:
+<pre><code>ALTER SYSTEM ADD BACKEND "new-be:9050";</code></pre>
+      </li>
+      <li>새 BE에서 <code>start_be.sh --daemon</code>.</li>
+      <li><code>SHOW BACKENDS</code>로 alive 확인 후, 자동 리밸런스가 시작된다(타블렛이 새 BE로 분산).</li>
+    </ol>
+
+    <h3 id="remove-be">BE 안전 제거 (DECOMMISSION)</h3>
+<pre><code>-- 1) 우선 디커미션 (해당 BE의 Tablet을 다른 BE로 이전)
+ALTER SYSTEM DECOMMISSION BACKEND "old-be:9050";
+
+-- 2) Tablet 이동이 모두 끝나길 기다린다 (TabletNum이 0에 가까워질 때까지)
+SHOW BACKENDS;
+
+-- 3) 완전 제거
+ALTER SYSTEM DROP BACKEND "old-be:9050";</code></pre>
+    <div class="callout warn">
+      <div class="callout-title">⚠️ 주의</div>
+      <p><code>DROP BACKEND</code>를 곧바로 실행하면 데이터가 손실될 수 있습니다.
+      반드시 <code>DECOMMISSION → 이전 완료 확인 → DROP</code> 순서를 지키세요.</p>
+    </div>
+
+    <h3 id="add-fe">FE 추가 / 제거</h3>
+<pre><code>-- 추가
+ALTER SYSTEM ADD FOLLOWER  "fe-new:9010";
+ALTER SYSTEM ADD OBSERVER  "fe-obs:9010";
+
+-- 제거
+ALTER SYSTEM DROP FOLLOWER "fe-old:9010";
+ALTER SYSTEM DROP OBSERVER "fe-obs:9010";</code></pre>
+
+    <h2 id="backup">5.3 백업 / 복원</h2>
+    <p>
+      StarRocks는 <strong>BACKUP / RESTORE</strong> 명령으로 테이블·파티션 단위 백업을 외부 스토리지(HDFS/S3 등)에 저장합니다.
+      먼저 외부 위치를 <strong>Repository</strong>로 등록해야 합니다.
+    </p>
+<pre><code>-- 1) 저장소 등록 (예: HDFS)
+CREATE REPOSITORY sr_backup
+WITH BROKER 'hdfs_broker'
+ON LOCATION 'hdfs://nn/backup/starrocks/'
+PROPERTIES (
+  "username" = "sr",
+  "password" = ""
+);
+
+-- 2) 특정 테이블 백업
+BACKUP SNAPSHOT mydb.snap_20260507
+TO sr_backup
+ON (orders, users)
+PROPERTIES ("type" = "full");
+
+-- 3) 진행 상황
+SHOW BACKUP FROM mydb;
+
+-- 4) 복원
+RESTORE SNAPSHOT mydb.snap_20260507
+FROM sr_backup
+ON (orders, users)
+PROPERTIES (
+  "backup_timestamp" = "2026-05-07-13-00-00",
+  "replication_num" = "3"
+);</code></pre>
+    <p>
+      외부 카탈로그(Hive 등)의 데이터는 StarRocks가 백업하지 않습니다 — 원천 시스템에 책임이 있습니다.
+      StarRocks가 직접 들고 있는 <strong>내부 테이블</strong>과 <strong>FE 메타데이터</strong>가 백업 대상입니다.
+    </p>
+
+    <h3 id="fe-meta-backup">FE 메타데이터 백업</h3>
+    <p>
+      가장 단순한 방법은 야간에 한 번 <code>fe/meta</code> 디렉터리를 통째로 tar로 묶어 별도 저장소에 보관하는 것입니다.
+      장애 시 동일 버전 FE의 같은 위치에 풀어두고 <code>start_fe.sh</code>로 기동하면 메타가 그대로 살아납니다.
+    </p>
+
+    <h2 id="upgrade">5.4 업그레이드</h2>
+    <p>일반적인 절차(rolling).</p>
+    <ol>
+      <li><strong>Observer FE → Follower FE → Leader FE 순으로 1대씩</strong> 새 버전 바이너리로 교체하고 재기동.</li>
+      <li>FE가 모두 새 버전이 된 후 <strong>BE를 1대씩</strong> 교체. 한 번에 1대만 — Tablet 복제 3개 중 1개씩만 빠지도록.</li>
+      <li>각 단계마다 <code>SHOW FRONTENDS</code> / <code>SHOW BACKENDS</code>로 alive와 버전 확인.</li>
+    </ol>
+    <p>
+      메이저 라인을 건너뛰는 업그레이드(예: 3.1 → 4.x)는 <strong>중간 LTS를 거쳐</strong> 단계적으로 가는 것이 안전합니다.
+      공식 릴리스 노트의 호환성 항목을 반드시 확인하세요.
+    </p>
+
+    <h2 id="users">5.5 사용자 / 권한 / RBAC</h2>
+    <p>StarRocks는 v3.x부터 <strong>RBAC(Role-Based Access Control)</strong>을 지원합니다.</p>
+<pre><code>-- 사용자 생성
+CREATE USER 'analyst'@'%' IDENTIFIED BY 'secret';
+
+-- 역할 생성 / 권한 부여
+CREATE ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN DATABASE mart TO ROLE bi_reader;
+GRANT bi_reader TO USER 'analyst';
+
+-- 외부 카탈로그 권한
+GRANT USAGE ON CATALOG hive_prod TO ROLE bi_reader;
+GRANT SELECT ON ALL TABLES IN ALL DATABASES IN CATALOG hive_prod TO ROLE bi_reader;</code></pre>
+    <p>
+      카탈로그·DB·테이블·뷰·MV 모두 권한 객체이며, 와일드카드와 역할 상속을 활용하면 깔끔하게 관리됩니다.
+    </p>
+
+    <h2 id="resource-group">5.6 리소스 그룹 (워크로드 격리)</h2>
+    <p>
+      대시보드/임시쿼리/배치 ETL이 한 클러스터에 섞여 있으면 한쪽이 다른 쪽을 잡아먹기 쉽습니다.
+      <strong>Resource Group</strong>으로 CPU·메모리 비중을 구분할 수 있습니다.
+    </p>
+<pre><code>-- 그룹 생성 (대시보드용 — CPU 우선순위 높음)
+CREATE RESOURCE GROUP bi_dashboard
+WITH (
+  'cpu_core_limit' = '8',
+  'mem_limit'      = '30%',
+  'concurrency_limit' = '20',
+  'type' = 'normal'
+);
+
+-- 사용자 매핑
+ALTER RESOURCE GROUP bi_dashboard ADD (
+  USER='dashboard_app'
+);</code></pre>
+
+    <h2 id="monitoring">5.7 모니터링 — Prometheus + Grafana</h2>
+    <p>
+      FE/BE 모두 <code>/metrics</code> 엔드포인트를 노출합니다.
+    </p>
+    <ul>
+      <li>FE: <code>http://&lt;fe&gt;:8030/metrics</code></li>
+      <li>BE: <code>http://&lt;be&gt;:8040/metrics</code></li>
+    </ul>
+    <p>공식 GitHub의 <code>contrib/grafana-dashboards</code>에 사용할 만한 Grafana 대시보드 JSON이 있습니다.</p>
+    <p>가장 먼저 보는 지표:</p>
+    <ul>
+      <li>BE의 CPU/메모리/디스크 사용률</li>
+      <li>BE Compaction 적체(<code>compaction score</code>)</li>
+      <li>FE QPS, 평균 쿼리 지연, 활성 연결</li>
+      <li>Tablet 클론/복구 큐</li>
+    </ul>
+
+    <h2 id="audit">5.8 Audit Log</h2>
+    <p>
+      v3.x부터 <strong>audit log를 테이블로 떨어뜨리는 audit_loader 플러그인</strong>이 정식 제공됩니다.
+      audit 데이터를 StarRocks 자체 테이블에 넣어 SQL로 분석할 수 있습니다 — 누가 언제 어떤 쿼리를 얼마나 썼는지가 곧 그래프가 됩니다.
+    </p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — 운영 자동화 우선순위</div>
+      <ol>
+        <li><strong>NTP·로그·메트릭 표준화</strong>: 약 20대 PM의 <code>fe/log</code>·<code>be/log</code>를 ELK 또는 Loki로 한 곳에 모은다. 디스크 용량은 노드별로 무한이 아니므로 logrotate 필수.</li>
+        <li><strong>FE 메타 백업 야간 cron</strong>: <code>tar czf fe-meta-$(date +%F).tgz fe/meta</code> → 별도 NAS/HDFS. 약 20대 규모에서 메타 손실은 곧 클러스터 재구축이므로 보수적으로.</li>
+        <li><strong>BACKUP는 핵심 마트만</strong>: 외부 카탈로그 데이터는 원천에 책임이 있으니 백업 대상은 "내부 마트 + MV 정의" 수준으로 좁히는 게 효율적.</li>
+        <li><strong>Resource Group을 처음부터 분리</strong>: BI 트래픽 / 분석가 임시쿼리 / 배치 ETL 3개로 출발. 나중에 한 워크로드가 폭발해도 다른 사용자는 무사함.</li>
+        <li><strong>업그레이드 윈도우</strong>: BE 17대를 1대씩 교체하면 17×재기동 시간이라 한 번에 다 못한다. 보통 한 번에 2~3대씩 묶고(서로 다른 Tablet 복제를 보유하지 않도록 주의) 진행.</li>
+      </ol>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./04-deployment.html">← 4. 배포</a>
+        <a href="./catalogs/index.html">다음 → 6. 카탈로그</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/administration/management/" target="_blank" rel="noopener">docs.starrocks.io / Administration</a>,
+          <a href="https://docs.starrocks.io/docs/administration/user_privs/authorization/" target="_blank" rel="noopener">/User privileges</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>

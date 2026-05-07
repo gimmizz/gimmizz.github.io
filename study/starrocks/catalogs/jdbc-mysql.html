@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>6-2. JDBC (MySQL) Catalog — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="catalog-jdbc" data-base="../"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / External Catalog / 6-2. JDBC</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>6-2. JDBC Catalog (MySQL · PostgreSQL · Oracle ...)</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>JDBC URI + 드라이버 JAR + 사용자 정보만 주면 RDB를 카탈로그처럼 마운트할 수 있다.
+      가벼운 조회·통계 결합에 좋고, 무거운 집계는 원천 RDB에 부담을 주므로 Async MV로 옮기는 게 안전하다.</p>
+    </div>
+
+    <h2 id="support">6-2.1 지원 데이터베이스</h2>
+    <table>
+      <thead><tr><th>RDB</th><th>지원 시점</th><th>참고</th></tr></thead>
+      <tbody>
+        <tr><td>MySQL</td><td>v3.0+</td><td>가장 안정적·범용</td></tr>
+        <tr><td>PostgreSQL</td><td>v3.0+</td><td>—</td></tr>
+        <tr><td>Oracle</td><td>v3.2.9+</td><td>NUMBER/TIMESTAMP 매핑 옵션 존재</td></tr>
+        <tr><td>SQL Server</td><td>v3.3.1+</td><td>—</td></tr>
+        <tr><td>ClickHouse</td><td>v3.3.0+ (실험적)</td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="mysql-example">6-2.2 MySQL 카탈로그 예시</h2>
+<pre><code>CREATE EXTERNAL CATALOG mysql_ops
+PROPERTIES (
+  "type"          = "jdbc",
+  "user"          = "sr_reader",
+  "password"      = "...",
+  "jdbc_uri"      = "jdbc:mysql://mysql.internal:3306",
+  "driver_url"    = "file:///opt/sr/drivers/mysql-connector-j-8.4.0.jar",
+  "driver_class"  = "com.mysql.cj.jdbc.Driver"
+);
+
+-- 사용
+SET CATALOG mysql_ops;
+SHOW DATABASES;
+USE app;
+SELECT count(*) FROM users;
+
+-- 풀 네임 + 다른 카탈로그와 조인
+SELECT u.id, u.name, h.event_type
+FROM mysql_ops.app.users u
+JOIN hive_prod.dwh.events h
+  ON u.id = h.user_id
+WHERE h.dt = '2026-05-07';</code></pre>
+
+    <h2 id="driver">6-2.3 드라이버 배치 방법</h2>
+    <p><code>driver_url</code>은 세 가지 방식이 가능합니다.</p>
+    <ol>
+      <li><strong>HTTP/HTTPS URL</strong>: Maven Central 등에서 원격으로 다운로드.<br>
+        예: <code>https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar</code></li>
+      <li><strong>file:// (FE/BE 모두 같은 경로)</strong>: 인터넷이 막힌 사내망에서 가장 안정적. 모든 FE·BE 노드의 동일 경로(예: <code>/opt/sr/drivers/...</code>)에 JAR을 미리 깔아둡니다.</li>
+      <li><strong>file:// (NFS 등 공유 경로)</strong>: 모든 노드가 같은 마운트로 접근 가능하다면 사용 가능.</li>
+    </ol>
+    <p>
+      FE는 카탈로그 생성 시점에 JAR을 받고, BE는 첫 쿼리 시점에 받습니다 — 따라서 두 종류 노드 모두 다운로드 가능해야 합니다.
+    </p>
+    <div class="callout warn">
+      <div class="callout-title">⚠️ Java 환경</div>
+      <p>BE의 <code>start_be.sh</code>에서 <code>JAVA_HOME</code>이 JRE가 아니라 <strong>JDK</strong>를 가리켜야 합니다 (JNI 호환).</p>
+    </div>
+
+    <h2 id="oracle">6-2.4 Oracle 카탈로그 추가 옵션</h2>
+<pre><code>"oracle.number.default-scale"     = "6",
+"oracle.temporal.to-datetime"     = "false",
+"oracle.timestamptz.to-datetime"  = "false"</code></pre>
+    <p>
+      Oracle의 <code>NUMBER(p)</code>는 scale이 정해져 있지 않을 수 있어, 변환 기본 scale을 결정합니다.
+      Temporal/TimezoneTimestamp 옵션은 StarRocks에서 <code>DATETIME</code>으로 변환할지 <code>VARCHAR(64)</code>로 변환할지 결정합니다.
+    </p>
+
+    <h2 id="pushdown">6-2.5 푸시다운 (Predicate Pushdown)</h2>
+    <p>
+      StarRocks는 SELECT 컬럼 프로젝션과 단순 WHERE 조건을 원천 RDB로 푸시다운하려고 시도합니다.
+      그러나 모든 조건이 푸시다운되지는 않습니다 (함수, 복잡 표현식, 조인 등). 푸시다운 여부는 <code>EXPLAIN</code>으로 확인할 수 있습니다.
+    </p>
+<pre><code>EXPLAIN
+SELECT id, name FROM mysql_ops.app.users WHERE id BETWEEN 100 AND 200;</code></pre>
+    <p>
+      플랜에 <code>JDBC_SCAN_NODE</code>가 보이고, 그 아래 <code>jdbc-query</code>로 실제 RDB에 보낼 SQL이 표시됩니다.
+    </p>
+
+    <h2 id="dml">6-2.6 INSERT 지원</h2>
+    <p>JDBC Catalog는 <code>INSERT INTO ... SELECT</code>로 데이터를 원천 RDB에 쓰는 것도 지원합니다.</p>
+<pre><code>INSERT INTO mysql_ops.app.user_score
+SELECT user_id, sum(amount) AS score
+FROM hive_prod.dwh.events
+WHERE dt = '2026-05-07'
+GROUP BY user_id;</code></pre>
+    <p>다만 RDB가 OLTP라면 한 번에 너무 큰 양을 넣지 않도록 분할 적재해야 합니다.</p>
+
+    <h2 id="caveats">6-2.7 한계와 자주 만나는 함정</h2>
+    <ul>
+      <li><strong>RDB 부하</strong>: 큰 테이블에 GROUP BY를 그대로 던지면 원천 RDB가 죽을 수 있음. 운영 RDB는 가능하면 <em>읽기 복제본</em>(MySQL replica 등)에 붙일 것.</li>
+      <li><strong>드라이버 누락</strong>: BE 한 대라도 JAR 다운로드 실패 시 첫 쿼리에서 에러. 사내망에선 <code>file://</code> 방식 권장.</li>
+      <li><strong>네트워크</strong>: 모든 BE가 RDB 포트(예: 3306)에 접근 가능해야 함.</li>
+      <li><strong>인증 정보 노출</strong>: <code>SHOW CREATE CATALOG</code>로 비밀번호가 노출될 수 있음 — RBAC로 카탈로그 메타 권한을 제한.</li>
+      <li><strong>스키마 변경</strong>: RDB 컬럼이 바뀌면 <code>REFRESH</code>로 메타 갱신.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — MySQL 등 RDB를 안전하게 붙이기</div>
+      <ul>
+        <li><strong>읽기 전용 계정 + read replica 권장</strong>: 운영 MySQL primary가 아닌 read replica를 카탈로그 대상으로. <code>sr_reader</code> 같은 전용 계정에 SELECT만.</li>
+        <li><strong>드라이버는 <code>/opt/sr/drivers/</code>에 통일</strong>: 약 20대 PM에 Ansible로 같은 JAR을 배포. 인터넷 의존을 끊습니다.</li>
+        <li><strong>Async MV로 캐시</strong>: 같은 RDB 테이블을 자주 조회한다면 Async MV로 떠두고, MV 자동 사용을 켭니다 (<a href="../06-query-mv.html">7장 쿼리/MV</a> 참고). RDB는 30분~1시간 주기로만 건드리고, 분석가는 MV에서 응답을 받습니다.</li>
+        <li><strong>여러 RDB를 묶을 때</strong>: <code>mysql_ops_a</code>, <code>mysql_ops_b</code>처럼 카탈로그 이름에 환경/소스 구분을 넣으면 권한 관리가 깔끔합니다.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./hive.html">← 6-1. Hive</a>
+        <a href="./iceberg-hudi.html">다음 → 6-3. Iceberg / Hudi</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/data_source/catalog/jdbc_catalog/" target="_blank" rel="noopener">docs.starrocks.io / JDBC catalog</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>7. 쿼리 · Materialized View — StarRocks 한글 정리</title>
+  <link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="query-mv" data-base="./"></aside>
+
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="./index.html">홈</a> / 활용 / 7. 쿼리 · MV</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>7. 쿼리 · Materialized View</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks 쿼리는 <strong>벡터화 + CBO + MPP 셔플</strong>로 빠르다.
+      여기에 <strong>Async MV</strong>를 만들어 두면 사용자는 원본 SQL을 그대로 쓰지만 옵티마이저가 자동으로 MV를 사용한다.</p>
+    </div>
+
+    <h2 id="exec">7.1 쿼리 실행 모델</h2>
+    <p>StarRocks의 BE는 다음 단위로 동작합니다.</p>
+    <ul>
+      <li><strong>Fragment</strong> — 물리 플랜의 한 조각. FE 코디네이터가 BE에 분배.</li>
+      <li><strong>Pipeline</strong> — Fragment 안의 실행 단위. BE 내 여러 코어를 활용해 병렬 실행.</li>
+      <li><strong>Operator</strong> — Scan, Aggregate, HashJoin, Exchange 등 벡터화 연산자.</li>
+      <li><strong>Exchange</strong> — Fragment 간 셔플. Broadcast/Hash Partition/Bucket Shuffle.</li>
+    </ul>
+
+    <h2 id="cbo">7.2 CBO 사용을 위한 통계 관리</h2>
+    <p>CBO는 통계가 있어야 정확한 플랜을 만들 수 있습니다.</p>
+<pre><code>-- 수동 통계 수집
+ANALYZE TABLE mart.orders;
+ANALYZE TABLE mart.orders WITH SAMPLE 100000 ROWS;
+
+-- 통계 조회
+SHOW STATS META FOR mart.orders;
+SHOW STATS COLUMN FOR mart.orders;</code></pre>
+    <p>
+      v2.x부터 자동 통계가 활성화되어 있어 일반적으로는 별도 작업이 필요 없지만,
+      대규모 변경 직후나 성능 회귀 의심 시에는 수동 ANALYZE가 도움이 됩니다.
+    </p>
+
+    <h2 id="join-strategies">7.3 JOIN 전략</h2>
+    <table>
+      <thead><tr><th>전략</th><th>언제 쓰는가</th><th>비용</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Broadcast</strong></td><td>한쪽 테이블이 매우 작을 때 (예: 차원 테이블)</td><td>작은 쪽을 모든 BE에 복제</td></tr>
+        <tr><td><strong>Shuffle (Hash)</strong></td><td>양쪽 모두 큰 일반 케이스</td><td>두 테이블 모두 키 기준 셔플</td></tr>
+        <tr><td><strong>Bucket Shuffle</strong></td><td>한쪽이 조인 키로 버킷팅된 경우</td><td>한쪽만 셔플 — 절약</td></tr>
+        <tr><td><strong>Colocate</strong></td><td>두 테이블이 <em>Colocate Group</em>으로 같은 분배인 경우</td><td>셔플 없음 — 가장 빠름</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="hint">7.4 자주 쓰는 힌트</h2>
+<pre><code>-- 조인 전략 강제
+SELECT /*+ broadcast(b) */ * FROM big a JOIN small b ON a.id = b.id;
+
+-- 셔플 강제
+SELECT /*+ shuffle(b) */ * FROM a JOIN b ON a.id = b.id;
+
+-- 특정 MV 사용 강제 (또는 차단)
+SELECT /*+ MV_REWRITE_OFF */ * FROM ...;</code></pre>
+
+    <h2 id="explain">7.5 EXPLAIN 읽기</h2>
+<pre><code>EXPLAIN
+SELECT dt, count(*) FROM events WHERE dt = '2026-05-07' GROUP BY dt;
+
+-- 더 자세히 (실행 시간 + 메트릭)
+EXPLAIN ANALYZE
+SELECT dt, count(*) FROM events WHERE dt = '2026-05-07' GROUP BY dt;</code></pre>
+    <p>읽을 때 주목할 항목:</p>
+    <ul>
+      <li><strong>cardinality</strong> — 추정 행 수. 통계가 부정확하면 크게 어긋남.</li>
+      <li><strong>Predicates</strong> — 필터가 어디까지 푸시다운되었는가.</li>
+      <li><strong>Exchange</strong> — 셔플의 종류와 양.</li>
+      <li><strong>RewriteByMV</strong> — MV로 자동 재작성되었는지.</li>
+    </ul>
+
+    <h2 id="mv">7.6 Materialized View — Sync vs Async</h2>
+
+    <h3 id="sync-mv">Sync MV (단일 테이블 집계 인덱스)</h3>
+    <p>
+      베이스 테이블에 적재가 일어나면 동시에 갱신되는 가벼운 MV. 단일 테이블에 한정됩니다.
+    </p>
+<pre><code>-- 베이스 테이블의 일자별 집계 MV
+CREATE MATERIALIZED VIEW mv_event_d AS
+SELECT dt, channel, count(*) AS cnt
+FROM events
+GROUP BY dt, channel;</code></pre>
+
+    <h3 id="async-mv">Async MV (다중 테이블 + 외부 카탈로그까지) ⭐</h3>
+    <p>
+      여러 테이블을 조인하거나 외부 카탈로그를 포함할 수 있고, 스케줄/파티션 기반 리프레시를 지원하는 강력한 MV입니다.
+      <strong>Query Rewrite</strong>가 핵심으로, 사용자가 원본 SQL을 그대로 써도 옵티마이저가 MV를 알아서 활용합니다.
+    </p>
+<pre><code>CREATE MATERIALIZED VIEW mv_event_user_d
+PARTITION BY dt
+DISTRIBUTED BY HASH(user_id) BUCKETS 32
+REFRESH ASYNC
+       START('2026-05-08 02:00:00')
+       EVERY (INTERVAL 1 HOUR)
+PROPERTIES (
+  "replication_num" = "3"
+)
+AS
+SELECT
+  e.dt,
+  e.user_id,
+  u.grade,
+  count(*) AS cnt,
+  sum(e.amount) AS amt
+FROM hive_prod.dwh.events e
+JOIN mysql_ops.app.users  u ON e.user_id = u.id
+WHERE e.dt &gt;= '2026-01-01'
+GROUP BY e.dt, e.user_id, u.grade;</code></pre>
+
+    <h3 id="rewrite">Query Rewrite</h3>
+    <p>옵티마이저가 SQL을 보고 MV로 자동 치환할 수 있는지 판단합니다. 활성화/확인.</p>
+<pre><code>-- 세션 변수
+SET enable_materialized_view_rewrite = true;
+
+-- MV별 강제 활성화
+ALTER MATERIALIZED VIEW mv_event_user_d SET ("enable_query_rewrite" = "true");
+
+-- EXPLAIN 결과에서 'RewriteByMV' 항목 확인</code></pre>
+
+    <h3 id="refresh-modes">리프레시 모드</h3>
+    <ul>
+      <li><strong>ASYNC</strong> + 스케줄(<code>EVERY</code>) — 정기 리프레시.</li>
+      <li><strong>ASYNC</strong> + 수동(<code>REFRESH MATERIALIZED VIEW mv_x;</code>) — 외부 트리거.</li>
+      <li><strong>MANUAL</strong> — 자동 리프레시 안 함, 명시적으로만.</li>
+      <li><strong>INCREMENTAL</strong>(파티션 단위) — 베이스 테이블에서 변경된 파티션만 리프레시. 비용 큰 MV에서 필수.</li>
+    </ul>
+
+    <h2 id="loading">7.7 데이터 적재 방법 한눈에</h2>
+    <table>
+      <thead><tr><th>방식</th><th>용도</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td><code>INSERT INTO ... SELECT</code></td><td>외부 카탈로그/내부 테이블 간 ETL</td><td>가장 단순, ETL 도구 친화적</td></tr>
+        <tr><td><strong>Stream Load</strong></td><td>HTTP로 파일 적재</td><td>CSV/JSON, 쉬운 자동화</td></tr>
+        <tr><td><strong>Routine Load</strong></td><td>Kafka에서 지속 적재</td><td>실시간 적재 표준</td></tr>
+        <tr><td><strong>Broker Load</strong></td><td>HDFS/S3에서 대용량 일괄</td><td>레거시지만 여전히 유용</td></tr>
+        <tr><td><strong>Spark Load</strong></td><td>Spark로 변환·적재</td><td>대규모 백필</td></tr>
+        <tr><td><strong>Flink CDC</strong></td><td>Debezium/Flink로 CDC</td><td>Primary Key 테이블과 잘 맞음</td></tr>
+        <tr><td><strong>Files() 함수</strong></td><td>파일 위치만 주고 즉시 SELECT/INSERT</td><td>파일 단발 처리에 가장 편함</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="useful-sql">7.8 자주 쓰는 운영 SQL 모음</h2>
+<pre><code>-- 활성 쿼리
+SHOW PROCESSLIST;
+SHOW PROC '/current_queries';
+
+-- 쿼리 강제 종료
+KILL QUERY &lt;id&gt;;
+
+-- 최근 쿼리 통계 (Audit log 플러그인 적재 후)
+SELECT user, COUNT(*) cnt, AVG(query_time)/1000 avg_sec
+FROM starrocks_audit_db__.starrocks_audit_tbl__
+WHERE event_time &gt;= NOW() - INTERVAL 1 HOUR
+GROUP BY user
+ORDER BY cnt DESC;
+
+-- MV 상태
+SHOW MATERIALIZED VIEWS;
+SHOW MATERIALIZED VIEW mv_event_user_d\G
+
+-- MV 강제 리프레시
+REFRESH MATERIALIZED VIEW mv_event_user_d;
+REFRESH MATERIALIZED VIEW mv_event_user_d
+        PARTITION START('2026-05-07') END('2026-05-08')
+        FORCE;</code></pre>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트 — MV 운영 패턴</div>
+      <ul>
+        <li><strong>"BI 응답이 느리다 → MV로 캐시"</strong>가 첫 번째 대응. 자주 쓰는 결합/집계를 MV로 떠두면 외부 카탈로그 위에서도 BI 대시보드가 즉시 응답합니다.</li>
+        <li><strong>새벽 리프레시 정책</strong>: 무거운 MV는 새벽(02~04시)에 한 번 정리. <code>EVERY (INTERVAL 1 DAY)</code>로 시작하고, 데이터 신선도 요구가 늘면 시간 단위로 줄입니다.</li>
+        <li><strong>Incremental 우선</strong>: 파티션 단위 베이스 테이블이라면 처음부터 INCREMENTAL로 만든다. 풀 리프레시는 점점 비싸집니다.</li>
+        <li><strong>MV의 복제본은 BE 수에 맞게 3</strong>: 약 17 BE 환경에서 3복제는 안전. MV가 너무 커서 한 BE의 디스크를 위협한다면 파티션을 잘게 쪼개고 정렬키를 쿼리 패턴에 맞게 둡니다.</li>
+        <li><strong>Resource Group으로 MV 리프레시 격리</strong>: MV 리프레시 잡을 별도 Resource Group으로 묶으면 사용자 쿼리에 미치는 영향이 작아집니다.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./catalogs/iceberg-hudi.html">← 6-3. Iceberg / Hudi</a>
+        <a href="./07-tuning.html">다음 → 8. 튜닝</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/cover_pages/quick_start_overview/" target="_blank" rel="noopener">docs.starrocks.io / Quick start</a>,
+          <a href="https://docs.starrocks.io/docs/using_starrocks/Materialized_view/" target="_blank" rel="noopener">/Materialized view</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="./assets/sidebar.js"></script>
+</body>
+</html>
