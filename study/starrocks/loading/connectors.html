@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connectors (Spark · Flink · Kafka Connect · SMT) — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-conn" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / Connectors</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Connector — Spark · Flink · Kafka Connect · SMT</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>외부 도구에서 SR로 직접 적재하는 4가지 커넥터. Stream Load HTTP 호출을 표준화해 SDK처럼 사용.</p>
+    </div>
+
+    <h2 id="kafka-connect">Kafka Connect Sink Connector</h2>
+    <p>Kafka Connect 클러스터에서 SR Sink Connector를 등록하면 Kafka 토픽 데이터가 자동으로 SR에 적재된다. Routine Load와 비교해 <strong>Kafka Connect 표준 도구 생태계와 통합</strong>이 장점.</p>
+
+    <h3>설치 / 등록</h3>
+<pre><code># Connector JAR을 Kafka Connect plugin path에 배치
+# (StarRocks/starrocks-connector-for-kafka 다운로드)
+
+# Connector 등록
+POST /connectors
+{
+  "name": "sr-sink-orders",
+  "config": {
+    "connector.class": "com.starrocks.connector.kafka.StarRocksSinkConnector",
+    "topics": "cdc.orders",
+    "starrocks.http.url": "http://fe1:8030,http://fe2:8030",
+    "starrocks.username": "etl",
+    "starrocks.password": "...",
+    "starrocks.database.name": "mart",
+    "starrocks.topic2table.map": "cdc.orders:orders",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "tasks.max": "4",
+    "sink.properties.format": "json",
+    "sink.properties.strip_outer_array": "true"
+  }
+}</code></pre>
+
+    <h3>vs Routine Load</h3>
+    <table>
+      <thead><tr><th>항목</th><th>Routine Load</th><th>Kafka Connect</th></tr></thead>
+      <tbody>
+        <tr><td>운영 주체</td><td>SR FE</td><td>외부 Kafka Connect 클러스터</td></tr>
+        <tr><td>장점</td><td>SR 내장, 단순</td><td>변환·라우팅·모니터링 도구가 풍부 (SMT, Confluent UI 등)</td></tr>
+        <tr><td>단점</td><td>변환 로직이 SQL 한정</td><td>추가 클러스터 운영</td></tr>
+        <tr><td>권장</td><td>Routine Load 표준</td><td>Kafka Connect 생태계가 이미 있을 때</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="flink">Flink Connector</h2>
+    <p>Flink SQL 또는 DataStream API에서 sink로 SR을 사용. Routine Load보다 변환·조인이 강력. <a href="../integrations/spark-flink.html">자세한 코드 예시</a>.</p>
+<pre><code>CREATE TABLE sr_orders (
+  order_id BIGINT, user_id BIGINT, status STRING,
+  amount DECIMAL(18,2), updated_at TIMESTAMP(3)
+) WITH (
+  'connector' = 'starrocks',
+  'jdbc-url'  = 'jdbc:mysql://fe1:9030',
+  'load-url'  = 'fe1:8030;fe2:8030',
+  'database-name' = 'mart', 'table-name' = 'orders',
+  'username' = 'etl', 'password' = '...',
+  'sink.properties.format' = 'json',
+  'sink.semantic' = 'exactly-once'
+);
+
+INSERT INTO sr_orders SELECT * FROM kafka_source;</code></pre>
+    <p>Flink CDC + SR 조합은 OLTP → SR 실시간 동기화의 표준 패턴.</p>
+
+    <h2 id="spark">Spark Connector</h2>
+    <p>Spark에서 SR을 데이터 소스로 읽거나 쓰기. <a href="../integrations/spark-flink.html">자세한 코드 예시</a>.</p>
+<pre><code>// 읽기
+val df = spark.read.format("starrocks")
+  .option("starrocks.fenodes","fe1:8030,fe2:8030")
+  .option("starrocks.table.identifier","mart.orders")
+  .option("starrocks.user","etl")
+  .option("starrocks.password","...")
+  .load()
+
+// 쓰기 (Stream Load 기반)
+df.write.format("starrocks")
+  .option("starrocks.fenodes","fe1:8030,fe2:8030")
+  .option("starrocks.table.identifier","mart.orders")
+  ...
+  .mode("append").save()</code></pre>
+
+    <h2 id="smt">SMT (StarRocks Migration Tool)</h2>
+    <p>MySQL/PostgreSQL/Oracle 등을 Flink 경유로 SR에 동기화하는 도구. 스키마 자동 매핑 + Flink CDC 잡 자동 생성.</p>
+<pre><code># 일반 흐름
+1. SMT 설정 파일 작성 (소스 RDB 정보, 대상 SR 정보, 테이블 매핑)
+2. SMT 실행 → 다음을 자동 생성:
+   - SR DDL (CREATE TABLE)
+   - Flink job SQL (CDC 소스 + SR sink)
+3. 생성된 SQL을 Flink 클러스터에 제출
+
+# 결과
+- 초기 스냅샷 + 실시간 변경 동기화
+- PK 테이블 자동 UPSERT/DELETE</code></pre>
+    <p>SMT는 <strong>이전(migration) + 동기화</strong>를 한 번에 처리하는 헬퍼. CDC 셋업을 직접 짜기 부담스러울 때 유용.</p>
+
+    <h2 id="choose">선택 가이드</h2>
+    <table>
+      <thead><tr><th>상황</th><th>추천</th></tr></thead>
+      <tbody>
+        <tr><td>Kafka 토픽 → SR (단순)</td><td><a href="./routine-load.html">Routine Load</a></td></tr>
+        <tr><td>Kafka 토픽 → SR (Connect 생태계)</td><td>Kafka Connect Sink</td></tr>
+        <tr><td>Flink 변환 후 SR로</td><td>Flink Connector</td></tr>
+        <tr><td>Spark 배치 변환 후 SR로</td><td>Spark Connector 또는 <a href="./spark-load.html">Spark Load</a></td></tr>
+        <tr><td>MySQL/PG → SR 실시간 동기화 시작</td><td>SMT (Flink CDC 기반)</td></tr>
+        <tr><td>이미 있는 ETL/오케스트레이션과 통합</td><td>해당 도구의 SR 어댑터(dbt-starrocks 등)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>SR 단독 ETL이 목표라면 Routine Load + Pipe로 대부분 커버 가능. Connector는 외부 변환 도구가 이미 있을 때만 도입.</li>
+        <li>Flink CDC + SR PK 테이블이 OLTP 동기화의 표준 — SMT가 이걸 자동 생성해 빠르게 시작 가능.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./insert-files.html">← INSERT/FILES</a>
+        <a href="./transformations.html">다음 → 적재 시 변환</a>
+      </div>
+      <div>
+        <p class="source-cite">
+          <a href="https://docs.starrocks.io/docs/loading/Kafka-connector-starrocks/" target="_blank" rel="noopener">/Kafka connector</a>,
+          <a href="https://docs.starrocks.io/docs/loading/Flink-connector-starrocks/" target="_blank" rel="noopener">/Flink connector</a>,
+          <a href="https://docs.starrocks.io/docs/loading/Spark-connector-starrocks/" target="_blank" rel="noopener">/Spark connector</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

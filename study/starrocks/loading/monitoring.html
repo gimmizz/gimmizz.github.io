@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>적재 모니터링 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-mon" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / 모니터링</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>적재 모니터링</h1>
+
+    <h2 id="show">SHOW 명령</h2>
+<pre><code>SHOW LOAD WHERE STATE != 'FINISHED';
+SHOW LOAD WHERE LABEL = 'orders_20260507_001';
+SHOW LOAD FROM mart WHERE STATE = 'CANCELLED';
+
+SHOW STREAM LOAD WHERE STATE = 'FAILED';
+SHOW STREAM LOAD FROM mart\G
+
+SHOW ROUTINE LOAD;
+SHOW ROUTINE LOAD FOR mart.orders_cdc\G
+
+SHOW PIPES;
+SHOW PIPES FROM mart;</code></pre>
+
+    <h2 id="information-schema">information_schema 테이블</h2>
+    <table>
+      <thead><tr><th>테이블</th><th>내용</th></tr></thead>
+      <tbody>
+        <tr><td><code>information_schema.loads</code></td><td>전체 적재 잡 (모든 종류 통합)</td></tr>
+        <tr><td><code>information_schema.routine_loads</code></td><td>Routine Load 잡 상태</td></tr>
+        <tr><td><code>information_schema.stream_loads</code></td><td>Stream Load 잡 이력</td></tr>
+        <tr><td><code>information_schema.pipes</code></td><td>Pipe 정의·상태</td></tr>
+        <tr><td><code>information_schema.pipe_files</code></td><td>Pipe가 처리한 파일별 상태</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="queries">자주 쓰는 진단 쿼리</h2>
+
+    <h3>최근 1시간 실패 적재</h3>
+<pre><code>SELECT db_name, label, type, state, create_time, finish_time, error_msg
+FROM information_schema.loads
+WHERE state IN ('CANCELLED','FAILED')
+  AND create_time &gt;= NOW() - INTERVAL 1 HOUR
+ORDER BY create_time DESC;</code></pre>
+
+    <h3>잡 종류별 처리량 / 실패율</h3>
+<pre><code>SELECT
+  type,
+  count(*) AS total,
+  sum(state = 'FINISHED') AS finished,
+  sum(state IN ('CANCELLED','FAILED')) AS failed,
+  ROUND(sum(state IN ('CANCELLED','FAILED')) / count(*), 4) AS fail_rate
+FROM information_schema.loads
+WHERE create_time &gt;= NOW() - INTERVAL 24 HOUR
+GROUP BY type;</code></pre>
+
+    <h3>적재 지연 측정 (Routine Load)</h3>
+<pre><code># 데이터의 timestamp 컬럼 vs 현재 시각
+SELECT max(updated_at) AS last_loaded_ts,
+       NOW() - max(updated_at) AS lag
+FROM mart.orders;
+
+# Kafka offset lag와 함께 보면 더 정확</code></pre>
+
+    <h3>Routine Load PAUSED 검출</h3>
+<pre><code>SELECT name, state, error_log_urls, statistic
+FROM information_schema.routine_loads
+WHERE state = 'PAUSED';</code></pre>
+
+    <h3>Pipe 실패 파일</h3>
+<pre><code>SELECT pipe_name, file_name, load_state, file_size, error_msg
+FROM information_schema.pipe_files
+WHERE load_state = 'ERROR'
+ORDER BY last_modified DESC LIMIT 50;</code></pre>
+
+    <h2 id="metrics">Prometheus 메트릭 핵심</h2>
+    <table>
+      <thead><tr><th>메트릭</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td><code>be_load_channel_count</code></td><td>활성 적재 채널</td></tr>
+        <tr><td><code>be_routine_load_rows</code></td><td>Routine Load 처리 행</td></tr>
+        <tr><td><code>be_routine_load_error_rows</code></td><td>Routine Load 실패 행</td></tr>
+        <tr><td><code>be_stream_load_rows</code></td><td>Stream Load 처리 행</td></tr>
+        <tr><td><code>be_load_rpc_total</code></td><td>적재 RPC 호출</td></tr>
+        <tr><td><code>fe_load_jobs_total</code></td><td>FE 측 적재 잡 누적</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="alarms">알람 권장 임계</h2>
+    <table>
+      <thead><tr><th>지표</th><th>경고</th><th>위험</th></tr></thead>
+      <tbody>
+        <tr><td>Routine Load PAUSED</td><td>임의 1건</td><td>—</td></tr>
+        <tr><td>최근 1시간 적재 실패율</td><td>&gt; 1%</td><td>&gt; 5%</td></tr>
+        <tr><td>적재 지연 (NOW - max(updated_at))</td><td>&gt; 10분 (실시간 잡)</td><td>&gt; 1시간</td></tr>
+        <tr><td>Pipe 실패 파일</td><td>&gt; 0 (5분 지속)</td><td>&gt; 100</td></tr>
+        <tr><td>BE 적재 메모리</td><td>&gt; 50% of mem_limit</td><td>&gt; 80%</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="audit">Audit Log를 활용한 적재 분석</h2>
+<pre><code>-- audit_loader 플러그인 적재 후
+SELECT user, count(*) AS jobs,
+       AVG(query_time)/1000 AS avg_sec,
+       SUM(scan_rows) AS total_rows
+FROM starrocks_audit_db__.starrocks_audit_tbl__
+WHERE event_time &gt;= NOW() - INTERVAL 1 DAY
+  AND query_type IN ('LOAD','INSERT')
+GROUP BY user
+ORDER BY jobs DESC;</code></pre>
+
+    <h2 id="dashboard">Grafana 대시보드 권장 패널</h2>
+    <ul>
+      <li>적재 잡 상태 분포 (FINISHED / CANCELLED / FAILED)</li>
+      <li>Routine Load lag (현재 시각 - max(updated_at))</li>
+      <li>Pipe 처리율 / 실패 파일 수</li>
+      <li>BE 적재 메모리 / 채널 수</li>
+      <li>Stream Load p99 응답 시간</li>
+      <li>Compaction Score (적재 폭주 시 함께 적체)</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>알람을 안 잡아둔 PAUSED Routine Load 잡이 가장 흔한 ETL 사고. 처음부터 알람 자동화.</li>
+        <li>적재 지연(lag)을 SLA로 두고 분 단위로 수집 — 사용자 응답 SLA의 부모 지표.</li>
+        <li>실패 행은 ErrorURL을 ETL 로그에 자동 첨부. 사후 분석에 결정적.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./error-handling.html">← 에러 처리</a>
+        <a href="./best-practices.html">다음 → 베스트 프랙티스</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Loading_intro/" target="_blank" rel="noopener">docs.starrocks.io / Loading</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

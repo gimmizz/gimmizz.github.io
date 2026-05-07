@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>에러 처리 / 멱등성 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-err" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / 에러 처리</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>에러 처리 · 멱등성 · Strict Mode</h1>
+
+    <h2 id="label">label — 멱등성의 핵심</h2>
+    <p>모든 적재 잡(Stream/Routine/Broker/Spark/INSERT)은 <strong>label</strong>을 가진다. 같은 label은 한 번만 성공한다.</p>
+<pre><code># 같은 label로 두 번 호출 → 두 번째는 "label already exists"
+curl -H "label:orders_20260507_001" ...
+curl -H "label:orders_20260507_001" ...   # ← 무시 / 충돌
+
+-- INSERT도 label 지정 가능
+INSERT INTO mart.orders WITH LABEL orders_20260507_001 SELECT ...;</code></pre>
+    <p><strong>label 표준</strong>: <code>{table}_{yyyymmddHHMMSS}_{seq}</code> 또는 <code>{table}_{ds}_{run_id}</code>. ETL 도구의 run id를 끼워 넣으면 재시도 안전.</p>
+
+    <h2 id="filter">max_filter_ratio — 부분 실패 허용</h2>
+<pre><code># 기본 0 — 한 행이라도 실패하면 잡 실패
+-H "max_filter_ratio:0"
+
+# 1% 까지 실패 허용 (예: 일부 잘못된 행이 섞이는 케이스)
+-H "max_filter_ratio:0.01"</code></pre>
+    <p>운영에서는 <strong>0.001 ~ 0.01 정도</strong>가 무난. 허용 비율을 너무 크게 두면 데이터 품질 저하 감지가 늦어진다.</p>
+
+    <h2 id="error-url">ErrorURL — 실패 행 확인</h2>
+    <p>적재가 실패하거나 일부 필터된 경우 응답에 <code>ErrorURL</code>이 포함됨. 그 URL을 따라가면 실패한 행들이 텍스트로 저장되어 있다.</p>
+<pre><code># 응답 JSON 예
+{
+  "Status": "Success",
+  "Message": "OK",
+  "NumberFilteredRows": 3,
+  "ErrorURL": "http://be1:8040/api/_load_error_log?file=__shard_0/error_log_xxx"
+}
+
+curl http://be1:8040/api/_load_error_log?file=...    # 실패 행 보기</code></pre>
+    <p>Routine Load는 <code>SHOW ROUTINE LOAD ...</code>의 <code>ErrorLogUrls</code> 필드.</p>
+
+    <h2 id="strict">Strict Mode</h2>
+    <p>입력 행의 컬럼 변환 결과가 NULL인데 NOT NULL 컬럼으로 들어가는 경우 등을 어떻게 처리할지 결정.</p>
+<pre><code>-- Stream Load 헤더
+-H "strict_mode:true"
+
+# strict_mode = true:  변환 실패 행을 즉시 fail (또는 max_filter_ratio에 카운트)
+# strict_mode = false: NULL을 그대로 INSERT 시도 (NOT NULL 컬럼이면 또 다른 실패)</code></pre>
+    <p>운영에서는 <strong>strict_mode = true + max_filter_ratio = 0.001</strong> 조합이 자주 쓰임.</p>
+
+    <h2 id="timeout">timeout</h2>
+<pre><code>-H "timeout:600"           # 600초 (Stream Load 기본 600s)
+-- Broker/Spark Load: PROPERTIES("timeout"="14400")  (4시간 등)</code></pre>
+    <p>대용량 잡은 timeout을 충분히. 타임아웃이 되면 잡은 CANCELLED.</p>
+
+    <h2 id="retry">재시도 패턴</h2>
+    <ol>
+      <li>같은 잡 같은 label로 재호출 → label 충돌이라 두 번 처리 안 됨 (멱등).</li>
+      <li>label만 새로 만들어 재시도 → 두 번 처리되니 적재 측에서 중복 발생 가능. PK 테이블이면 UPSERT라 안전.</li>
+      <li>일반 패턴: ETL 도구가 task instance ID를 label에 끼워 넣어 자동 멱등.</li>
+    </ol>
+
+    <h2 id="rl-fail">Routine Load 실패 정책</h2>
+<pre><code>PROPERTIES (
+  "max_error_number"     = "10000",   -- 누적 허용 실패 행
+  "max_filter_ratio"     = "0.01",    -- 한 batch 허용 실패 비율
+  "max_batch_interval"   = "10",
+  "max_batch_rows"       = "200000",
+  "max_batch_size"       = "104857600"
+)</code></pre>
+    <p>실패 행이 한도를 넘으면 잡이 PAUSED 상태로 멈춘다. <a href="../ops/routine-load-runbook.html">Routine Load Runbook</a>에서 RESUME 절차 참조.</p>
+
+    <h2 id="diag">진단 흐름</h2>
+    <ol>
+      <li><code>SHOW LOAD WHERE LABEL='...'</code>의 <strong>ErrorMsg + ErrorURL</strong>.</li>
+      <li>ErrorURL에서 실패 행 직접 확인.</li>
+      <li>표현식·jsonpaths·column 매핑 점검.</li>
+      <li>스키마 (NOT NULL, DEFAULT) 점검.</li>
+      <li>fe.log / be.WARNING에서 같은 시각 메시지.</li>
+    </ol>
+
+    <h2 id="exactly-once">Exactly-Once 보장 방식</h2>
+    <table>
+      <thead><tr><th>방식</th><th>보장</th><th>핵심</th></tr></thead>
+      <tbody>
+        <tr><td>Stream Load</td><td>Exactly-once (label 기반)</td><td>같은 label 재시도 시 중복 X</td></tr>
+        <tr><td>Routine Load</td><td>At-least-once → PK로 dedup</td><td>Kafka offset commit + SR transaction</td></tr>
+        <tr><td>Broker Load</td><td>Exactly-once (label 기반)</td><td>—</td></tr>
+        <tr><td>Pipe</td><td>파일 단위 멱등</td><td>처리한 파일은 메타에 기록, 두 번 처리 X</td></tr>
+        <tr><td>Flink Connector + 2PC</td><td>Exactly-once</td><td>Flink checkpoint + SR 2PC</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="2pc">Stream Load Transaction (2PC)</h2>
+    <p>여러 적재 호출을 묶어 atomic하게 commit/rollback하고 싶을 때.</p>
+<pre><code># 1) Begin
+curl -H "label:tx_001" -X POST .../api/transaction/begin
+
+# 2) 데이터 N번 PUT (같은 label)
+curl -H "label:tx_001" -T part1.csv ...
+curl -H "label:tx_001" -T part2.csv ...
+
+# 3) Prepare → Commit (또는 Rollback)
+curl -H "label:tx_001" -X POST .../api/transaction/prepare
+curl -H "label:tx_001" -X POST .../api/transaction/commit</code></pre>
+    <p>Flink Connector의 exactly-once 모드가 내부적으로 이 방식을 사용.</p>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li><strong>label 충돌·실패는 ETL 알람의 1순위</strong> — 자동화 안 해두면 사고가 늦게 발견.</li>
+        <li><code>max_filter_ratio</code>와 <code>strict_mode</code>는 신중히. 너무 관대하면 데이터 품질 저하가 묻힌다.</li>
+        <li>ErrorURL을 ETL 로그에 자동 기록 — 사후 분석에 필수.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./transformations.html">← 적재 시 변환</a>
+        <a href="./monitoring.html">다음 → 적재 모니터링</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Loading_intro/" target="_blank" rel="noopener">docs.starrocks.io / Loading intro</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

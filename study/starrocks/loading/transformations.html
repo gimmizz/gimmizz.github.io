@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>적재 시 변환 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-tr" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / 변환</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>적재 시 변환 (Transform-on-Load)</h1>
+
+    <p>적재 단계에서 컬럼 매핑·표현식·필터·UPSERT 모드를 함께 지정하면 별도 ETL 단계 없이 raw → mart 변환을 한 번에 끝낼 수 있다.</p>
+
+    <h2 id="columns">column 매핑·표현식</h2>
+    <p>입력 파일의 컬럼이 테이블 컬럼과 1:1이 아닐 때 또는 변환이 필요할 때.</p>
+<pre><code># Stream Load — columns 헤더에 입력 컬럼 + 표현식 표기
+curl -H "label:orders_001" \
+     -H "format:CSV" -H "column_separator:," \
+     -H "columns:order_id, user_id, raw_status, raw_amount, raw_ts,
+                 status = upper(raw_status),
+                 amount = CAST(raw_amount AS DECIMAL(18,2)),
+                 updated_at = STR_TO_DATE(raw_ts, '%Y-%m-%dT%H:%i:%s')" \
+     -T orders.csv \
+     http://fe1:8030/api/mart/orders/_stream_load</code></pre>
+    <p>왼쪽은 <strong>입력 컬럼 순서</strong>, 오른쪽은 <strong>테이블 컬럼 = 표현식</strong>. 입력에만 있고 테이블에 없는 컬럼은 그대로 두면 무시됨.</p>
+
+    <h2 id="where">WHERE 필터</h2>
+<pre><code>curl ... -H "where:status != 'cancelled' and amount &gt; 0" ...</code></pre>
+    <p>적재 시점에 필터링되어 SR에 들어가지 않음. 노이즈 제거에 유용.</p>
+
+    <h2 id="json">JSON 적재 — jsonpaths</h2>
+<pre><code>-- 입력 JSON: {"id":1, "user":{"id":100}, "status":"paid"}
+curl -H "format:JSON" \
+     -H "strip_outer_array:true" \
+     -H "jsonpaths:[\"$.id\",\"$.user.id\",\"$.status\"]" \
+     -H "columns:order_id, user_id, status" \
+     ...
+
+-- jsonpaths로 추출 → columns로 매핑.
+-- 더 복잡한 경우 columns에 표현식 포함:
+-- "columns:order_id, user_id, status, amt_str, amount = CAST(amt_str AS DECIMAL)"</code></pre>
+
+    <h2 id="upsert">PK 테이블의 모드 — UPSERT / DELETE / MERGE</h2>
+
+    <h3>기본 UPSERT</h3>
+<pre><code># PK 테이블에 적재하면 기본이 UPSERT (있으면 업데이트, 없으면 INSERT)
+-H "columns:order_id,user_id,status,amount,updated_at"</code></pre>
+
+    <h3>DELETE</h3>
+<pre><code># merge_type = DELETE 로 지정 + PK 컬럼만 보냄
+-H "merge_type:DELETE"
+-H "columns:order_id"</code></pre>
+
+    <h3>partial update — 일부 컬럼만 갱신</h3>
+<pre><code>-H "partial_update:true"
+-H "columns:order_id, status"
+# order_id에 해당하는 row의 status만 갱신, 다른 컬럼은 보존</code></pre>
+
+    <h3>__op 컬럼 (CDC 직접 처리)</h3>
+<pre><code># 0=UPSERT, 1=DELETE 를 입력 컬럼에 포함
+-H "columns:order_id, user_id, status, amount, updated_at, op = ...,
+            __op = op"
+# Flink CDC가 이런 형태로 전달할 때 매우 편리</code></pre>
+
+    <h2 id="rl-tr">Routine Load의 변환</h2>
+<pre><code>CREATE ROUTINE LOAD mart.orders_cdc ON orders
+COLUMNS (
+  raw_id, raw_user, raw_status, raw_amt, raw_ts,
+  order_id   = raw_id,
+  user_id    = raw_user,
+  status     = upper(raw_status),
+  amount     = CAST(raw_amt AS DECIMAL(18,2)),
+  updated_at = FROM_UNIXTIME(raw_ts)
+)
+PROPERTIES (
+  "format" = "JSON",
+  "jsonpaths" = "[\"$.id\",\"$.user_id\",\"$.status\",\"$.amount\",\"$.ts\"]"
+)
+FROM KAFKA (...);</code></pre>
+
+    <h2 id="insert-tr">INSERT INTO ... SELECT의 변환 (가장 자유)</h2>
+    <p>Stream/Routine Load의 표현식보다 자유로운 변환은 SR 안에서 INSERT INTO ... SELECT로 처리.</p>
+<pre><code>INSERT INTO mart.orders
+SELECT
+  CAST(get_json_int(payload, '$.id') AS BIGINT)        AS order_id,
+  CAST(get_json_int(payload, '$.user.id') AS BIGINT)   AS user_id,
+  upper(get_json_string(payload, '$.status'))          AS status,
+  CAST(get_json_string(payload, '$.amount') AS DECIMAL(18,2)) AS amount,
+  ts                                                    AS updated_at
+FROM stg.orders_raw
+WHERE ts &gt;= '{{ ds }}'::DATETIME AND ts &lt; '{{ next_ds }}'::DATETIME;</code></pre>
+    <p>raw → stage는 표현식으로 적재, stage → mart는 INSERT INTO ... SELECT — 이 분리가 ETL 운영에서 가장 유연.</p>
+
+    <h2 id="sample">자주 쓰는 표현식 모음</h2>
+    <table>
+      <thead><tr><th>목적</th><th>예</th></tr></thead>
+      <tbody>
+        <tr><td>NULL → 기본값</td><td><code>status = COALESCE(raw_status, 'unknown')</code></td></tr>
+        <tr><td>대소문자</td><td><code>status = upper(raw_status)</code></td></tr>
+        <tr><td>날짜 파싱</td><td><code>ts = STR_TO_DATE(raw_ts, '%Y-%m-%dT%H:%i:%s')</code></td></tr>
+        <tr><td>epoch → DATETIME</td><td><code>ts = FROM_UNIXTIME(raw_epoch)</code></td></tr>
+        <tr><td>JSON 추출</td><td><code>user_id = get_json_int(payload, '$.user.id')</code></td></tr>
+        <tr><td>해시</td><td><code>hash_id = MD5(user_id_str)</code></td></tr>
+        <tr><td>분기</td><td><code>tier = CASE WHEN amt &gt; 1000 THEN 'gold' ELSE 'silver' END</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>적재 시 표현식은 <strong>가벼운 정제</strong>(타입 변환·NULL 처리·간단 함수)에 한정. 복잡한 변환은 stage 적재 후 INSERT INTO ... SELECT가 더 유지보수에 유리.</li>
+        <li>JSON 페이로드의 핵심 키는 <a href="../sql/generated-columns.html">Generated Columns</a>로 빼두면 적재 옵션도 단순해진다.</li>
+        <li>CDC는 <code>__op</code> 컬럼 패턴으로 UPSERT/DELETE를 한 번에 처리 — Flink Connector나 Routine Load 모두 지원.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./connectors.html">← Connectors</a>
+        <a href="./error-handling.html">다음 → 에러 처리</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Etl_in_loading/" target="_blank" rel="noopener">docs.starrocks.io / Transform data at loading</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

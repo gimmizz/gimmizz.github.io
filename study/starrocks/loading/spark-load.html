@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spark Load — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-spark" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / Spark Load</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Spark Load — TB급 비동기 배치 적재</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>Spark 클러스터를 활용해 정렬·인덱스 빌드까지 사전 처리한 결과물을 SR에 적재. <strong>수십 GB ~ TB</strong> 단위 일배치/백필에 적합.</p>
+    </div>
+
+    <h2 id="when">언제 쓰나</h2>
+    <ul>
+      <li>Hive 또는 HDFS의 <strong>매우 큰 테이블</strong> 한 번에 적재.</li>
+      <li>SR로의 직접 INSERT가 부담되는 분량.</li>
+      <li>이미 Spark 클러스터가 있고 변환 로직이 PySpark/Scala로 작성되어 있는 경우.</li>
+    </ul>
+    <p>스트리밍/소량 적재는 적합하지 않다. 그쪽은 Stream Load / Routine Load.</p>
+
+    <h2 id="how">동작 흐름</h2>
+<div class="mermaid">
+graph LR
+  HIVE["Hive / HDFS<br/>(원본)"]
+  SPARK["Spark 클러스터<br/>(정렬 · partial sort · index)"]
+  ETL["ETL 결과<br/>(SR 포맷에 맞춰 분할)"]
+  BE["StarRocks BE<br/>(Spark 결과 import)"]
+  HIVE --> SPARK --> ETL --> BE</div>
+
+    <h2 id="prepare">사전 준비</h2>
+    <ol>
+      <li>Spark 클러스터 (YARN 또는 K8s)</li>
+      <li>Spark 클라이언트가 SR FE/BE에 접근 가능</li>
+      <li>SR <code>spark</code> 자원 등록:
+<pre><code>CREATE EXTERNAL RESOURCE 'spark_etl'
+PROPERTIES (
+  "type"           = "spark",
+  "spark.master"   = "yarn",
+  "spark.submit.deployMode" = "cluster",
+  "working_dir"    = "hdfs://nn/tmp/sr-spark",
+  "broker"         = "broker_default"
+);
+
+GRANT USAGE_PRIV ON RESOURCE 'spark_etl' TO 'etl_user';</code></pre>
+      </li>
+    </ol>
+
+    <h2 id="load">LOAD 잡</h2>
+<pre><code>LOAD LABEL mart.orders_20260507_full (
+  DATA INFILE("hdfs://nn/warehouse/orders/dt=2026-05-07/*")
+  INTO TABLE orders
+  FORMAT AS "parquet"
+  (order_id, user_id, status, amount, updated_at)
+)
+WITH RESOURCE 'spark_etl' (
+  "spark.executor.memory" = "8g",
+  "spark.executor.instances" = "20"
+)
+PROPERTIES (
+  "timeout" = "14400",
+  "max_filter_ratio" = "0.01"
+);
+
+-- 진행 상황
+SHOW LOAD WHERE LABEL = 'mart.orders_20260507_full'\G</code></pre>
+
+    <h2 id="vs">Broker Load vs Spark Load</h2>
+    <table>
+      <thead><tr><th>구분</th><th>Broker Load</th><th>Spark Load</th></tr></thead>
+      <tbody>
+        <tr><td>실행 위치</td><td>BE 직접</td><td>외부 Spark 클러스터</td></tr>
+        <tr><td>적합 분량</td><td>수십 ~ 수백 GB</td><td>수백 GB ~ TB</td></tr>
+        <tr><td>BE 부하</td><td>적재 동안 BE CPU 점유</td><td>BE 부하 작음 (Spark가 변환·정렬 처리)</td></tr>
+        <tr><td>의존성</td><td>없음</td><td>Spark 클러스터 필요</td></tr>
+        <tr><td>비용</td><td>SR 클러스터 자원만</td><td>SR + Spark 자원</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="caveats">주의</h2>
+    <ul>
+      <li>Spark Load는 SR 4.x에서도 유효하나, 최근에는 <strong>외부 카탈로그(Hive) + INSERT INTO ... SELECT</strong>나 <strong>Pipe</strong>가 더 자주 쓰임.</li>
+      <li>ETL 중간 산출물이 working_dir(HDFS)에 쌓이므로 정기 청소 필요.</li>
+      <li>Schema 변환·복잡한 윈도우 함수 등은 Spark에서 끝내고 결과만 SR로 보내는 패턴이 일반적.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>"SR-only ETL"을 지향한다면 Spark Load는 거의 쓸 일이 없습니다 — Hive Catalog + INSERT INTO ... SELECT 또는 Pipe가 더 단순합니다.</li>
+        <li>이미 Spark 클러스터가 있고 변환 로직이 거기 있는 환경에서만 검토.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./broker-load.html">← Broker Load</a>
+        <a href="./pipe.html">다음 → Pipe</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/SparkLoad/" target="_blank" rel="noopener">docs.starrocks.io / Spark Load</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

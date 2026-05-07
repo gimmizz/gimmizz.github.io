@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ETL 아키텍처 (SR-only) — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-etl" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / ETL 아키텍처</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>ETL 아키텍처 — StarRocks로 모든 ETL을 처리하는 패턴</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>StarRocks 한 엔진으로 <strong>Ingest → Stage → Mart → Serve</strong> 전체를 처리하는 모던 ETL 아키텍처. 외부 변환 엔진(Spark/Flink) 의존 없이 SQL과 MV로 끝난다.</p>
+    </div>
+
+    <h2 id="layers">4계층 모델</h2>
+<div class="mermaid">
+graph LR
+  SRC["소스<br/>(MySQL/Kafka/HDFS/S3/CDC)"]
+  ING["① Ingest<br/>Stream/Routine/Broker/Pipe"]
+  STG["② Stage<br/>raw 테이블 (Duplicate)"]
+  MART["③ Mart<br/>Primary Key + 파티션"]
+  SRV["④ Serve<br/>Async MV (자동 rewrite)"]
+  BI["BI · 분석가 · 앱"]
+  SRC --> ING --> STG --> MART --> SRV --> BI</div>
+
+    <h3>① Ingest — 소스에서 SR로</h3>
+    <p>소스 종류별로 적재 방식 선택. <a href="./index.html">적재 개요</a> 표 참고.</p>
+    <ul>
+      <li><strong>OLTP(MySQL/PG)</strong> → Flink CDC + Routine Load 또는 Stream Load 어댑터</li>
+      <li><strong>이벤트 스트림(Kafka)</strong> → Routine Load (또는 Kafka Connect)</li>
+      <li><strong>대용량 파일(HDFS/S3)</strong> → Pipe (자동 감지) 또는 Broker Load</li>
+      <li><strong>외부 RDB 정기 동기</strong> → JDBC Catalog + INSERT INTO ... SELECT</li>
+      <li><strong>외부 데이터 레이크</strong> → Hive/Iceberg/Unified Catalog → INSERT INTO ... SELECT</li>
+    </ul>
+
+    <h3>② Stage — 정제 전 raw 보존</h3>
+    <p>입력을 바로 Mart에 쓰지 않고 <strong>1단계 stage 테이블</strong>에 그대로 적재한다. 이유:</p>
+    <ul>
+      <li>스키마 변경/소스 오류 시 재처리 가능 (raw가 살아있어서)</li>
+      <li>Mart 변환 로직과 적재를 분리 — 재배치 자유</li>
+      <li>Append-only이므로 가장 단순한 모델(Duplicate)을 사용</li>
+    </ul>
+<pre><code>CREATE TABLE stg.orders_raw (
+  ts          DATETIME NOT NULL,
+  order_id    BIGINT,
+  user_id     BIGINT,
+  status      VARCHAR(32),
+  amount      DECIMAL(18,2),
+  payload     JSON
+)
+DUPLICATE KEY(ts, order_id)
+PARTITION BY date_trunc('day', ts)
+DISTRIBUTED BY RANDOM
+PROPERTIES (
+  "replication_num" = "3",
+  "compression" = "ZSTD",
+  "dynamic_partition.enable" = "true",
+  "dynamic_partition.start" = "-30",
+  "dynamic_partition.end"   = "3",
+  "dynamic_partition.time_unit" = "DAY"
+);</code></pre>
+
+    <h3>③ Mart — 변환 결과의 진실 소스</h3>
+    <p>비즈니스 의미를 가진 마트. 변경이 잦으면 <strong>Primary Key</strong> 모델로 UPSERT/DELETE를 받는다.</p>
+<pre><code>CREATE TABLE mart.orders (
+  order_id   BIGINT NOT NULL,
+  user_id    BIGINT,
+  status     VARCHAR(32),
+  amount     DECIMAL(18,2),
+  updated_at DATETIME
+)
+PRIMARY KEY(order_id)
+PARTITION BY date_trunc('day', updated_at)
+DISTRIBUTED BY HASH(order_id)
+PROPERTIES (
+  "replication_num"         = "3",
+  "enable_persistent_index" = "true",
+  "dynamic_partition.enable"= "true",
+  "dynamic_partition.start" = "-180",
+  "dynamic_partition.end"   = "3",
+  "dynamic_partition.time_unit" = "DAY"
+);</code></pre>
+
+    <h3>④ Serve — Async MV로 사용자 응답 가속</h3>
+    <p>사용자 SQL을 그대로 두고, 옵티마이저가 MV로 자동 재작성하게 한다.</p>
+<pre><code>CREATE MATERIALIZED VIEW mart.mv_orders_d
+PARTITION BY dt DISTRIBUTED BY HASH(user_id)
+REFRESH ASYNC EVERY (INTERVAL 10 MINUTE)
+PROPERTIES ("enable_query_rewrite" = "true")
+AS
+SELECT date_trunc('day', updated_at) dt, status, count(*) cnt, sum(amount) amt
+FROM mart.orders GROUP BY 1, 2;</code></pre>
+
+    <h2 id="patterns">변환 (Stage → Mart) 표준 패턴</h2>
+
+    <h3>패턴 A — 단순 매핑</h3>
+<pre><code>INSERT INTO mart.orders
+SELECT order_id, user_id, status, amount, updated_at
+FROM stg.orders_raw
+WHERE ts &gt;= '{{ ds }}'::DATETIME AND ts &lt; '{{ next_ds }}'::DATETIME;</code></pre>
+
+    <h3>패턴 B — JSON 추출 + 정제</h3>
+<pre><code>INSERT INTO mart.orders
+SELECT
+  get_json_int(payload, '$.id')                    AS order_id,
+  get_json_int(payload, '$.user.id')               AS user_id,
+  COALESCE(get_json_string(payload, '$.status'), 'unknown') AS status,
+  CAST(get_json_string(payload, '$.amount') AS DECIMAL(18,2)) AS amount,
+  ts AS updated_at
+FROM stg.orders_raw
+WHERE ts::DATE = '{{ ds }}';</code></pre>
+
+    <h3>패턴 C — 차원 결합</h3>
+<pre><code>INSERT INTO mart.events_user
+SELECT e.event_time, e.user_id, e.event_type, u.grade, u.country
+FROM stg.events_raw e
+LEFT JOIN dim.user u ON e.user_id = u.user_id
+WHERE e.event_time::DATE = '{{ ds }}';</code></pre>
+
+    <h3>패턴 D — INSERT OVERWRITE (멱등 백필)</h3>
+<pre><code>INSERT OVERWRITE mart.orders_d PARTITION (dt='{{ ds }}')
+SELECT date_trunc('day', updated_at) dt, user_id, status, count(*) cnt, sum(amount) amt
+FROM mart.orders WHERE updated_at::DATE = '{{ ds }}'
+GROUP BY 1, 2, 3;</code></pre>
+
+    <h2 id="orchestration">오케스트레이션 — Dagster + dbt 또는 Airflow</h2>
+    <p>Stage → Mart의 INSERT는 <strong>dbt 모델</strong>로 정의하고, <strong>Dagster</strong>가 적재 잡(Routine Load의 RUNNING 확인 → dbt run → MV refresh)을 자동화. 자세한 패턴은 외부 도구 연동 섹션 참고.</p>
+    <ul>
+      <li><a href="../integrations/dagster-dbt.html">Dagster + dbt</a></li>
+      <li><a href="../integrations/dbt.html">dbt-starrocks 어댑터</a></li>
+      <li><a href="../integrations/airflow.html">Airflow</a></li>
+    </ul>
+
+    <h2 id="why-sr-only">왜 SR-only가 가능한가</h2>
+    <table>
+      <thead><tr><th>전통적 ETL의 단계</th><th>SR-only에서 대응</th></tr></thead>
+      <tbody>
+        <tr><td>Spark/Flink로 변환</td><td>SR의 SQL/MV/Pipe로 충분 — 외부 엔진 불필요</td></tr>
+        <tr><td>중간 결과를 Hive/Iceberg에 쓰기</td><td>SR 내부 Stage/Mart 테이블에 직접</td></tr>
+        <tr><td>BI용 cube 별도 생성</td><td>Async MV (자동 query rewrite)</td></tr>
+        <tr><td>스케줄러 + 의존성 관리</td><td>Dagster/Airflow + dbt 그래프</td></tr>
+        <tr><td>UPSERT 위해 Hudi/Iceberg</td><td>Primary Key 테이블이 자동 처리</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="external">외부 카탈로그와 결합</h2>
+    <p>SR-only ETL이라도 raw가 이미 Hive/Iceberg에 있다면 그쪽을 그대로 활용:</p>
+<pre><code>-- 외부 카탈로그를 stage로 활용 (SR 자체 적재 X)
+INSERT INTO mart.orders
+SELECT order_id, user_id, status, amount, updated_at
+FROM hive_prod.dwh.orders_raw
+WHERE dt = '{{ ds }}';
+
+-- 또는 Async MV가 외부 카탈로그를 베이스로
+CREATE MATERIALIZED VIEW mv_hive_orders_d ...
+AS SELECT ... FROM hive_prod.dwh.orders_raw GROUP BY ...;</code></pre>
+
+    <h2 id="schedule">전체 일/시간 스케줄 예</h2>
+    <table>
+      <thead><tr><th>주기</th><th>작업</th></tr></thead>
+      <tbody>
+        <tr><td>실시간(분 단위)</td><td>Routine Load → mart.orders (PK 자동 UPSERT)</td></tr>
+        <tr><td>10분 주기</td><td>mv_orders_minute 자동 refresh</td></tr>
+        <tr><td>매시 00분</td><td>mv_orders_hour 자동 refresh</td></tr>
+        <tr><td>매일 02:00</td><td>dbt run (마트 일자 집계, 차원 결합)</td></tr>
+        <tr><td>매일 03:00</td><td>대형 MV 풀 refresh, ANALYZE 통계</td></tr>
+        <tr><td>매일 04:00</td><td>BACKUP SNAPSHOT</td></tr>
+        <tr><td>매주</td><td>오래된 stage 파티션 DROP, BACKUP 보존정책 정리</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="tips">자주 빠뜨리는 운영 포인트</h2>
+    <ul>
+      <li><strong>label 표준화</strong>: <code>{table}_{ds}_{seq}</code> 형식. 재시도 안전.</li>
+      <li><strong>Resource Group 분리</strong>: ETL과 BI를 같은 Resource Group에 두면 사용자 쿼리가 ETL 적체 시 영향.</li>
+      <li><strong>통계 갱신</strong>: 큰 INSERT 후 ANALYZE 호출. 옵티마이저가 정확한 플랜을 잡음.</li>
+      <li><strong>MV 의존성</strong>: 베이스 테이블 변경 직후엔 MV가 stale. 의도적 큰 변경 후엔 명시적 REFRESH.</li>
+      <li><strong>Stage TTL</strong>: stage는 보통 30일이면 충분. 너무 길게 보관하면 디스크 압박.</li>
+      <li><strong>외부 도구 시점 차이</strong>: Routine Load의 적재 완료를 기다리지 않고 dbt run을 실행하면 결과가 비어 있을 수 있음. Dagster sensor로 max(updated_at) 확인 후 실행.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 20대 PM 환경은 ETL+BI 동시 처리에 충분. 단 BI/ETL Resource Group을 처음부터 분리.</li>
+        <li>"Spark/Flink 없이 ETL을 SR로 통합"하는 가장 큰 가치는 <strong>운영 변수 감소</strong>. 변환·적재·서빙이 한 SQL로 통일.</li>
+        <li>대용량 외부 파일이 정기적으로 떨어지는 환경이면 <a href="./pipe.html">Pipe</a>가 가장 자연스러운 적재 방식.</li>
+        <li>실시간 CDC + 정기 MV는 가장 흔한 조합. <a href="../patterns/realtime-dashboard.html">실시간 대시보드 패턴</a>도 같이 참고.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./index.html">← 적재 개요</a>
+        <a href="./stream-load.html">다음 → Stream Load</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Loading_intro/" target="_blank" rel="noopener">docs.starrocks.io / Loading intro</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

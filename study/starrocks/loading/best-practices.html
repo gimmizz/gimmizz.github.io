@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>적재 베스트 프랙티스 — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-bp" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / 베스트 프랙티스</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>적재 베스트 프랙티스</h1>
+
+    <h2 id="select">1. 시나리오별 적재 방식 선택</h2>
+    <table>
+      <thead><tr><th>시나리오</th><th>권장</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>로컬 CSV/JSON 즉시 적재</td><td>Stream Load</td><td>≤ 10GB, 잡당 단발</td></tr>
+        <tr><td>Kafka 토픽 → 실시간</td><td>Routine Load (또는 Kafka Connect)</td><td>min/max_batch 잘 잡으면 거의 무중단</td></tr>
+        <tr><td>HDFS/S3 대용량 단발 백필</td><td>Broker Load</td><td>수십 ~ 수백 GB</td></tr>
+        <tr><td>HDFS/S3 정기 파일 (자동)</td><td>Pipe</td><td>100GB ~ TB+, 새 파일 자동 감지</td></tr>
+        <tr><td>외부 카탈로그 → 내부 마트</td><td>INSERT INTO ... SELECT</td><td>Hive/Iceberg/Unified가 있으면 가장 깔끔</td></tr>
+        <tr><td>OLTP CDC 실시간</td><td>Flink CDC + SR Connector</td><td>PK 테이블 자동 UPSERT</td></tr>
+        <tr><td>OLTP 정기 동기 (간단)</td><td>JDBC Catalog + INSERT</td><td>분/시간 단위 충분한 신선도</td></tr>
+        <tr><td>Spark에서 변환된 결과</td><td>Spark Connector 또는 Spark Load</td><td>—</td></tr>
+        <tr><td>분석가 즉석 파일 검증</td><td>FILES() + SELECT</td><td>적재 없이도 검증 가능</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="batch">2. 배치 사이즈 가이드</h2>
+    <ul>
+      <li>너무 작은 batch (1초·수백 행)는 <strong>Compaction 적체</strong>를 유발.</li>
+      <li>너무 큰 batch는 한 번 실패 시 재시도 비용이 큼.</li>
+      <li>일반 권장: <strong>한 번에 수만 ~ 수십만 행</strong>, 5~30초 주기.</li>
+    </ul>
+<pre><code>-- Routine Load 권장 시작값
+"max_batch_interval" = "10",         -- 10초
+"max_batch_rows"     = "200000",     -- 20만 행
+"max_batch_size"     = "104857600"   -- 100MB</code></pre>
+
+    <h2 id="label">3. label 표준</h2>
+<pre><code>{table}_{yyyymmddHHMMSS}_{run_id}
+# 예: orders_20260507093000_a1b2c3</code></pre>
+    <p>ETL 도구의 task instance ID(Airflow run_id, Dagster run_key)를 끼워 넣으면 자동 멱등.</p>
+
+    <h2 id="rg">4. Resource Group 분리</h2>
+<pre><code>CREATE RESOURCE GROUP rg_etl
+WITH ('cpu_core_limit'='24','mem_limit'='50%','concurrency_limit'='8','type'='normal');
+
+ALTER RESOURCE GROUP rg_etl ADD (USER='etl_user');</code></pre>
+    <p>BI 사용자와 ETL을 같은 RG에 두지 말 것 — 적재 폭주 시 BI 응답이 무너진다.</p>
+
+    <h2 id="stage">5. Stage → Mart 분리</h2>
+    <ul>
+      <li>입력을 Mart에 직접 쓰지 말고 <strong>Stage 테이블</strong>에 raw 보존.</li>
+      <li>Stage는 Duplicate + RANDOM + ZSTD + 30~90일 보존(<code>dynamic_partition</code>).</li>
+      <li>Mart는 Primary Key + 분배 키 정렬 + 180일+ 보존.</li>
+      <li>자세한 설계는 <a href="./etl-architecture.html">ETL 아키텍처</a>.</li>
+    </ul>
+
+    <h2 id="schema">6. 스키마 설계</h2>
+    <ul>
+      <li><strong>Generated Columns</strong>로 JSON 핫 키를 컬럼화 (<a href="../sql/generated-columns.html">참고</a>).</li>
+      <li>날짜는 Expression Partition (<code>date_trunc('day', ts)</code>) 권장 — 자동 파티션 생성.</li>
+      <li>분배 키는 JOIN/필터에 자주 쓰는 컬럼 (보통 PK).</li>
+      <li>고카디널리티 ID 컬럼은 <code>bloom_filter_columns</code>에 추가.</li>
+      <li>저카디널리티(상태/카테고리)는 <code>BITMAP</code> 인덱스.</li>
+    </ul>
+
+    <h2 id="parallel">7. 병렬도 / 부하</h2>
+    <table>
+      <thead><tr><th>방식</th><th>병렬도 결정</th></tr></thead>
+      <tbody>
+        <tr><td>Stream Load</td><td>병행 호출 수가 곧 병렬도. FE LB로 분산.</td></tr>
+        <tr><td>Routine Load</td><td>kafka_partitions 수 = BE에 분산되는 단위. BE 수의 배수가 안정적.</td></tr>
+        <tr><td>Broker Load</td><td><code>load_parallel_instance_num</code> 설정.</td></tr>
+        <tr><td>Pipe</td><td><code>BATCH_SIZE</code>·<code>BATCH_FILES</code>로 조정.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="idempotent">8. 멱등 백필 패턴</h2>
+<pre><code># 같은 날 다시 돌려도 결과가 동일하게 (예: dt='2026-05-07' 백필)
+INSERT OVERWRITE mart.orders_d PARTITION (dt='2026-05-07')
+SELECT date_trunc('day', updated_at) AS dt, user_id, status, count(*), sum(amount)
+FROM mart.orders WHERE updated_at::DATE = '2026-05-07'
+GROUP BY 1, 2, 3;</code></pre>
+
+    <h2 id="watermark">9. 워터마크 / 늦은 데이터</h2>
+    <ul>
+      <li>실시간 적재에서 5~10분 늦게 도착하는 이벤트가 있다면 <strong>겹치는 윈도</strong>로 백필:
+<pre><code># 15분 단위 잡: 직전 30분치를 INSERT OVERWRITE
+INSERT OVERWRITE ...
+WHERE event_time &gt;= NOW() - INTERVAL 30 MINUTE;</code></pre>
+      </li>
+      <li>PK 테이블이면 늦은 도착이 자동 UPSERT — 별도 처리 불필요.</li>
+    </ul>
+
+    <h2 id="capacity">10. Capacity 산정</h2>
+    <ul>
+      <li>BE 한 대당 적재 처리량은 보통 <strong>50~200 MB/s</strong>(데이터/포맷 의존).</li>
+      <li>약 17 BE × 100 MB/s = 1.7 GB/s 정도가 안전 상한.</li>
+      <li>이 이상이 필요하면 BE 추가 또는 Pipe로 batch 분할.</li>
+    </ul>
+
+    <h2 id="anti">11. 흔한 안티패턴</h2>
+    <ul>
+      <li>❌ 1초 단위 1KB Stream Load — Compaction 적체.</li>
+      <li>❌ 한 큰 잡으로 1년치 백필 — timeout/failure 비용 큼. 일자 단위로 분할.</li>
+      <li>❌ ON DUPLICATE KEY UPDATE 시도 — SR은 PK 테이블의 자동 UPSERT로 대체.</li>
+      <li>❌ ETL 사용자에 ALL 권한 — DELETE/DROP 사고 위험. INSERT 한정 권한.</li>
+      <li>❌ MV 의존하는 테이블에 큰 INSERT 후 MV 무관심 — stale로 BI 응답 오류.</li>
+      <li>❌ JSON payload 핫 키를 매번 함수로 추출 — Generated Column으로 빼기.</li>
+    </ul>
+
+    <h2 id="checklist">12. 적재 잡 출시 전 체크리스트</h2>
+    <ol>
+      <li>[ ] 적재 방식 선택 근거 명확</li>
+      <li>[ ] label 패턴 표준화 (재시도 안전)</li>
+      <li>[ ] max_filter_ratio / strict_mode 설정</li>
+      <li>[ ] timeout 충분히</li>
+      <li>[ ] 전용 ETL 계정 + Resource Group</li>
+      <li>[ ] Stage 테이블 dynamic_partition 보존정책</li>
+      <li>[ ] Mart 테이블 PK + 파티션 + 분배 키 검토</li>
+      <li>[ ] PAUSED / 실패 알람 자동화</li>
+      <li>[ ] ErrorURL을 ETL 로그에 기록</li>
+      <li>[ ] 적재 후 ANALYZE 통계 갱신</li>
+      <li>[ ] MV 의존성 검토 + REFRESH 트리거</li>
+      <li>[ ] 백업 정책에 새 테이블 포함</li>
+    </ol>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>약 20대 PM 환경에서 ETL을 SR로 통합하면, 적재 채널 + 변환 + 마트 + MV가 한 클러스터에서 진행 — Resource Group 분리만 잘 해두면 충분.</li>
+        <li>처음 6개월은 알람을 보수적으로(민감) 잡고, 안정화되면 노이즈를 줄이는 식으로 임계 조정.</li>
+        <li>label 패턴은 처음에 박아두는 게 가장 중요. 나중에 바꾸면 멱등성 안정성이 깨짐.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./monitoring.html">← 모니터링</a>
+        <a href="../catalogs/index.html">다음 → 카탈로그</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Loading_intro/" target="_blank" rel="noopener">docs.starrocks.io / Loading</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>

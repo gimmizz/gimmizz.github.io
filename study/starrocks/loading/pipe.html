@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipe — StarRocks 가이드</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" data-active="loading-pipe" data-base="../"></aside>
+  <main class="content">
+    <header class="page-header">
+      <span class="breadcrumb"><a href="../index.html">홈</a> / 데이터 적재 / Pipe</span>
+      <span>최종 갱신: 2026-05-07</span>
+    </header>
+
+    <h1>Pipe — 자동 감지 적재 (S3 / HDFS)</h1>
+
+    <div class="callout tip">
+      <div class="callout-title">📌 한 줄 요약</div>
+      <p>한 번 등록하면 SR이 <strong>S3/HDFS의 새 파일을 자동 감지·적재</strong>한다. <code>INSERT INTO ... SELECT FROM FILES()</code>의 자동화 버전. 100GB ~ TB 규모 배치를 잘게 끊어 처리.</p>
+    </div>
+
+    <h2 id="when">언제 쓰나</h2>
+    <ul>
+      <li>외부 시스템이 S3/HDFS에 정기적으로 파일을 떨어뜨리는 환경.</li>
+      <li>"새 파일이 도착하면 SR에 적재"를 자동화하고 싶을 때.</li>
+      <li>대용량 배치를 한 번에 INSERT 하기 부담스러울 때 — Pipe가 자동으로 작은 단위로 분할.</li>
+    </ul>
+
+    <h2 id="syntax">CREATE PIPE</h2>
+<pre><code>CREATE PIPE [IF NOT EXISTS] pipe_name
+PROPERTIES (
+  "AUTO_INGEST"   = "TRUE",       -- 자동 폴링·적재
+  "POLL_INTERVAL" = "30",         -- 초 단위
+  "BATCH_SIZE"    = "1GB",        -- 한 번 처리할 크기
+  "BATCH_FILES"   = "100"         -- 한 번 처리할 파일 수
+)
+AS
+INSERT INTO &lt;target_table&gt;
+SELECT * FROM FILES (
+  "path"   = "s3://bucket/events/*.parquet",
+  "format" = "parquet",
+  "aws.s3.endpoint"   = "...",
+  "aws.s3.access_key" = "...",
+  "aws.s3.secret_key" = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);</code></pre>
+
+    <h2 id="how">동작 흐름</h2>
+<div class="mermaid">
+graph LR
+  S["S3 / HDFS<br/>새 파일 도착"]
+  P["Pipe 폴러<br/>(POLL_INTERVAL)"]
+  Q["내부 큐<br/>(파일 단위 추적)"]
+  W["워커<br/>BATCH_SIZE/FILES만큼 묶어 INSERT"]
+  T["타깃 테이블"]
+  S --> P --> Q --> W --> T</div>
+    <p>이미 처리한 파일은 메타에 기록 → 같은 파일 두 번 처리 안 됨 (멱등).</p>
+
+    <h2 id="ops">관리 명령</h2>
+<pre><code>SHOW PIPES;
+SHOW PIPES FROM mart;
+DESC PIPE pipe_name;
+
+-- 일시 정지 / 재개 / 삭제
+ALTER PIPE pipe_name SUSPEND;
+ALTER PIPE pipe_name RESUME;
+DROP PIPE pipe_name;
+
+-- 옵션 변경
+ALTER PIPE pipe_name SET ("BATCH_SIZE" = "2GB");
+
+-- 처리한 파일 / 진행 상태
+SELECT * FROM information_schema.pipes WHERE name = 'pipe_name';
+SELECT * FROM information_schema.pipe_files WHERE pipe_name = 'pipe_name'
+ORDER BY load_state, last_modified DESC LIMIT 50;</code></pre>
+
+    <h2 id="example">실전 예 — 일자별 이벤트 파일 자동 적재</h2>
+<pre><code>-- 1) 타깃 테이블
+CREATE TABLE mart.events (
+  event_time DATETIME NOT NULL,
+  user_id    BIGINT,
+  event_type VARCHAR(32),
+  payload    JSON,
+  dt         DATE AS (CAST(event_time AS DATE))
+)
+DUPLICATE KEY(event_time, user_id)
+PARTITION BY dt
+DISTRIBUTED BY RANDOM
+PROPERTIES ("replication_num" = "3", "compression" = "ZSTD");
+
+-- 2) Pipe 생성
+CREATE PIPE mart.events_pipe
+PROPERTIES (
+  "AUTO_INGEST" = "TRUE",
+  "POLL_INTERVAL" = "60",
+  "BATCH_SIZE" = "1GB"
+)
+AS
+INSERT INTO mart.events (event_time, user_id, event_type, payload)
+SELECT event_time, user_id, event_type, payload
+FROM FILES (
+  "path"   = "s3://datalake/events/dt=*/*.parquet",
+  "format" = "parquet",
+  "aws.s3.endpoint"   = "https://minio.internal:9000",
+  "aws.s3.access_key" = "...",
+  "aws.s3.secret_key" = "...",
+  "aws.s3.enable_path_style_access" = "true"
+);
+
+-- 3) 모니터링
+SHOW PIPES;
+SELECT pipe_name, file_name, load_state, error_msg
+FROM information_schema.pipe_files
+WHERE pipe_name = 'events_pipe' AND load_state = 'ERROR';</code></pre>
+
+    <h2 id="vs">Pipe vs Routine Load vs Broker Load</h2>
+    <table>
+      <thead><tr><th>구분</th><th>Pipe</th><th>Routine Load</th><th>Broker Load</th></tr></thead>
+      <tbody>
+        <tr><td>소스</td><td>S3 / HDFS 파일</td><td>Kafka / Pulsar</td><td>HDFS / S3 파일 (단발)</td></tr>
+        <tr><td>자동 감지</td><td>O</td><td>O</td><td>X (수동)</td></tr>
+        <tr><td>처리 단위</td><td>파일</td><td>레코드 batch</td><td>잡 1회</td></tr>
+        <tr><td>적합 분량</td><td>100GB ~ TB+</td><td>실시간 KB ~ MB/s</td><td>수십 ~ 수백 GB 단발</td></tr>
+        <tr><td>멱등성</td><td>파일 단위 추적</td><td>label 기반</td><td>label 기반</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="caveats">주의</h2>
+    <ul>
+      <li>처리한 파일 메타가 SR에 보관됨 — 외부에서 같은 경로의 파일을 덮어쓰면 재처리 안 됨.</li>
+      <li>실패 파일은 <code>load_state = 'ERROR'</code>로 남음. 원인 점검 후 수동 재시도.</li>
+      <li>FILES()와 같은 권한·인증 — IAM/Access Key 부여.</li>
+      <li>v3.2+ 기능. 사용 SR 버전 확인.</li>
+    </ul>
+
+    <div class="callout cluster">
+      <div class="callout-title">클러스터 적용 노트</div>
+      <ul>
+        <li>외부 시스템이 일별/시간별 parquet 파일을 떨어뜨리는 환경에 가장 잘 맞는 적재 방식. 운영자 개입 거의 없음.</li>
+        <li>처리 큐가 너무 길어지면 BATCH_SIZE/POLL_INTERVAL 조정.</li>
+        <li>실패 파일 재처리는 일반적으로 <code>ALTER PIPE ... RETRY</code>(있는 버전) 또는 SR 측 메타 정리 후 재등록.</li>
+      </ul>
+    </div>
+
+    <footer class="page-footer">
+      <div class="nav-links">
+        <a href="./spark-load.html">← Spark Load</a>
+        <a href="./insert-files.html">다음 → INSERT · FILES()</a>
+      </div>
+      <div>
+        <p class="source-cite"><a href="https://docs.starrocks.io/docs/loading/Loading_intro/" target="_blank" rel="noopener">docs.starrocks.io / Loading</a></p>
+      </div>
+    </footer>
+  </main>
+</div>
+<script src="../assets/sidebar.js"></script>
+</body>
+</html>
